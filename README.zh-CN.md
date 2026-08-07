@@ -2,6 +2,8 @@
 
 [English](README.md) | 简体中文
 
+[官方网站](https://agentflowing.app) · [GitHub](https://github.com/moutsea/agentflowing)
+
 ![AgentFlowing——构建智能体，为结果付费。](docs/images/agentflowing-hero-zh-CN.png)
 
 一个 Cloudflare 原生的开源模板，用于构建通过订阅和积分计费盈利的 AI Agent SaaS。
