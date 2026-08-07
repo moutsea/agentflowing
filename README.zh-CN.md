@@ -2,6 +2,8 @@
 
 [English](README.md) | 简体中文
 
+![AgentFlowing——构建智能体，为结果付费。](docs/images/agentflowing-hero-zh-CN.png)
+
 一个 Cloudflare 原生的开源模板，用于构建通过订阅和积分计费盈利的 AI Agent SaaS。
 
 AgentFlowing 将 React 产品界面、Better Auth、组织多租户、持久化流式对话、用量积分、Stripe 计费、API 访问和文件上下文整合到一个可部署的 Cloudflare Worker 中。你可以保留 SaaS 基础设施，替换示例 Agent、提示词和产品文案，快速构建自己的产品。
