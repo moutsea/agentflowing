@@ -1,0 +1,57 @@
+name: Bug report / Bug 反馈
+description: Report a reproducible problem / 报告可复现的问题
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve AgentFlowing. Never include secrets or customer data.
+        感谢帮助改进 AgentFlowing。请勿提交密钥或客户数据。
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary / 问题概述
+      description: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction / 复现步骤
+      description: Provide the smallest reproducible sequence, repository commit, and relevant configuration with secrets removed.
+      placeholder: |
+        1. Start with ...
+        2. Call/click ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment / 环境
+      placeholder: |
+        OS:
+        Node:
+        pnpm:
+        Browser:
+        Wrangler:
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs / 脱敏日志
+      description: Include request IDs and minimal logs only after removing secrets and personal data.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks / 检查
+      options:
+        - label: I searched existing issues and pull requests. / 我已搜索现有 Issue 和 PR。
+          required: true
+        - label: This report does not contain a security vulnerability. / 这不是安全漏洞报告。
+          required: true
+        - label: I removed secrets and personal data. / 我已移除密钥和个人数据。
+          required: true

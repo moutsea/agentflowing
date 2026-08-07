@@ -1,0 +1,27 @@
+# Required for Better Auth. Generate with: openssl rand -base64 32
+BETTER_AUTH_SECRET=replace-with-at-least-32-random-characters
+
+# Optional OAuth providers. Each provider requires both values.
+GITHUB_CLIENT_ID=
+GITHUB_CLIENT_SECRET=
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+
+# Optional Cloudflare Email Sending. EMAIL_FROM enables Magic Link and password reset.
+EMAIL_FROM=
+EMAIL_FROM_NAME=AgentFlowing
+MAGIC_LINK_EXPIRES_SECONDS=900
+
+# Optional Stripe subscriptions.
+STRIPE_SECRET_KEY=
+STRIPE_WEBHOOK_SECRET=
+STRIPE_PRO_PRICE_ID=
+STRIPE_SCALE_PRICE_ID=
+
+# Non-sensitive defaults live in wrangler.jsonc. Uncomment only to override locally.
+# APP_NAME=AgentFlowing
+# APP_URL=http://localhost:5173
+# DEFAULT_AI_MODEL=@cf/zai-org/glm-4.7-flash
+# FREE_CREDITS=100
+# MESSAGE_CREDIT_COST=1
+# AGENT_RUN_STALE_SECONDS=1800

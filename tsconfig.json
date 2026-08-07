@@ -1,0 +1,12 @@
+{
+  "extends": "agents/tsconfig",
+  "compilerOptions": {
+    "paths": {
+      "@/*": ["./src/*"]
+    },
+    "types": ["node", "vite/client", "@cloudflare/vitest-pool-workers/types"],
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true
+  },
+  "include": ["src", "test", "scripts", "env.d.ts", "vite.config.ts", "vitest.config.ts"]
+}

@@ -1,0 +1,41 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1786026167391,
+      "tag": "0000_marvelous_leech",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1786027699005,
+      "tag": "0001_colossal_lilith",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1786029054347,
+      "tag": "0002_quiet_black_panther",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1786115454000,
+      "tag": "0003_billing_invariants",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1786057686812,
+      "tag": "0004_flat_rhodey",
+      "breakpoints": true
+    }
+  ]
+}

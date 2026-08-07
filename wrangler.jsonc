@@ -1,0 +1,90 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "agentflowing",
+  "main": "src/server/index.ts",
+  "compatibility_date": "2026-08-06",
+  "compatibility_flags": ["nodejs_compat"],
+  "ai": {
+    "binding": "AI",
+    "remote": true,
+  },
+  "assets": {
+    "directory": "./public",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/agents/*"],
+  },
+  "triggers": {
+    "crons": ["*/5 * * * *"],
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "agentflowing-db",
+      "database_id": "replace-with-your-d1-database-id",
+      "migrations_dir": "migrations",
+    },
+  ],
+  "r2_buckets": [
+    {
+      "binding": "FILES",
+      "bucket_name": "agentflowing-files",
+    },
+  ],
+  "send_email": [
+    {
+      "name": "EMAIL",
+    },
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "MonetizedAgent",
+        "class_name": "MonetizedAgent",
+      },
+    ],
+  },
+  "ratelimits": [
+    {
+      "name": "AUTH_RATE_LIMITER",
+      "namespace_id": "11001",
+      "simple": { "limit": 30, "period": 60 },
+    },
+    {
+      "name": "API_RATE_LIMITER",
+      "namespace_id": "11002",
+      "simple": { "limit": 60, "period": 60 },
+    },
+    {
+      "name": "AI_RATE_LIMITER",
+      "namespace_id": "11003",
+      "simple": { "limit": 30, "period": 60 },
+    },
+    {
+      "name": "WEBHOOK_RATE_LIMITER",
+      "namespace_id": "11004",
+      "simple": { "limit": 300, "period": 60 },
+    },
+  ],
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["MonetizedAgent"],
+    },
+  ],
+  "vars": {
+    "APP_NAME": "AgentFlowing",
+    "APP_URL": "http://localhost:5173",
+    "DEFAULT_AI_MODEL": "@cf/zai-org/glm-4.7-flash",
+    "FREE_CREDITS": "100",
+    "MESSAGE_CREDIT_COST": "1",
+    "AGENT_RUN_STALE_SECONDS": "1800",
+    "EMAIL_FROM": "",
+    "EMAIL_FROM_NAME": "AgentFlowing",
+    "MAGIC_LINK_EXPIRES_SECONDS": "900",
+  },
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "head_sampling_rate": 1 },
+    "traces": { "enabled": true, "head_sampling_rate": 0.05 },
+  },
+}
