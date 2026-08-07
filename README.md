@@ -2,6 +2,8 @@
 
 English | [简体中文](README.zh-CN.md)
 
+![AgentFlowing — Build agents. Charge for outcomes.](docs/images/agentflowing-hero-en.png)
+
 An open-source, Cloudflare-native starter for launching subscription and credit-based AI Agent SaaS products.
 
 AgentFlowing combines a React product UI, Better Auth, organization tenancy, durable streaming conversations, usage credits, Stripe billing, API access, and file context in one deployable Cloudflare Worker. Keep the SaaS foundation, replace the sample Agent and product copy, then build your own product.
