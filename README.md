@@ -278,6 +278,15 @@ docs/                         Architecture and external API notes
 
 Roadmap items are not commitments. Contributions should start with an issue so scope and architecture can be agreed before implementation.
 
+## Vibe Coding Channels
+
+Use the channel that matches your preferred AI coding ecosystem:
+
+| Models                        | Channel                          |
+| ----------------------------- | -------------------------------- |
+| Claude, Codex, Gemini         | [CodeByAI](https://codebyai.net) |
+| Kimi, GLM, Qwen, and DeepSeek | [KimiSeek](https://kimiseek.app) |
+
 ## Contributing and Security
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Use GitHub Issues for reproducible bugs and focused feature proposals.

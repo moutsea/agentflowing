@@ -278,6 +278,15 @@ docs/                         架构和外部 API 文档
 
 路线图不代表交付承诺。建议先创建 Issue 讨论范围和架构，再开始较大的实现。
 
+## Vibe Coding 渠道
+
+可以根据你偏好的 AI 编程模型生态选择对应渠道：
+
+| 模型                      | 渠道                             |
+| ------------------------- | -------------------------------- |
+| Claude、Codex、Gemini     | [CodeByAI](https://codebyai.net) |
+| Kimi、GLM、Qwen、DeepSeek | [KimiSeek](https://kimiseek.app) |
+
 ## 贡献与安全
 
 提交 Pull Request 前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。可复现 Bug 和聚焦的功能建议请通过 GitHub Issues 提交。
