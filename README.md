@@ -111,6 +111,15 @@ pnpm check
 pnpm exec wrangler deploy --dry-run
 ```
 
+## Vibe Coding Channels
+
+Use the channel that matches your preferred AI coding ecosystem:
+
+| Models                        | Channel                          |
+| ----------------------------- | -------------------------------- |
+| Claude, Codex, Gemini         | [CodeByAI](https://codebyai.net) |
+| Kimi, GLM, Qwen, and DeepSeek | [KimiSeek](https://kimiseek.app) |
+
 ## Configuration
 
 AgentFlowing uses `wrangler.jsonc` for non-sensitive defaults and Cloudflare bindings. Local secrets belong in `.dev.vars`; production secrets should be added with `wrangler secret put`. A conventional `.env.example` is also provided for tooling and discoverability, but `.dev.vars.example` is the canonical local Worker template.
@@ -277,15 +286,6 @@ docs/                         Architecture and external API notes
 - Automated deployment and release workflow
 
 Roadmap items are not commitments. Contributions should start with an issue so scope and architecture can be agreed before implementation.
-
-## Vibe Coding Channels
-
-Use the channel that matches your preferred AI coding ecosystem:
-
-| Models                        | Channel                          |
-| ----------------------------- | -------------------------------- |
-| Claude, Codex, Gemini         | [CodeByAI](https://codebyai.net) |
-| Kimi, GLM, Qwen, and DeepSeek | [KimiSeek](https://kimiseek.app) |
 
 ## Contributing and Security
 

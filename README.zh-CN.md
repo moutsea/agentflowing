@@ -111,6 +111,15 @@ pnpm check
 pnpm exec wrangler deploy --dry-run
 ```
 
+## Vibe Coding 渠道
+
+可以根据你偏好的 AI 编程模型生态选择对应渠道：
+
+| 模型                      | 渠道                             |
+| ------------------------- | -------------------------------- |
+| Claude、Codex、Gemini     | [CodeByAI](https://codebyai.net) |
+| Kimi、GLM、Qwen、DeepSeek | [KimiSeek](https://kimiseek.app) |
+
 ## 配置
 
 AgentFlowing 使用 `wrangler.jsonc` 保存非敏感默认值和 Cloudflare bindings。本地密钥放在 `.dev.vars`，生产密钥应使用 `wrangler secret put` 写入。仓库也提供常规的 `.env.example` 方便工具识别，但本地 Worker 配置以 `.dev.vars.example` 为准。
@@ -277,15 +286,6 @@ docs/                         架构和外部 API 文档
 - 自动部署与 Release 工作流
 
 路线图不代表交付承诺。建议先创建 Issue 讨论范围和架构，再开始较大的实现。
-
-## Vibe Coding 渠道
-
-可以根据你偏好的 AI 编程模型生态选择对应渠道：
-
-| 模型                      | 渠道                             |
-| ------------------------- | -------------------------------- |
-| Claude、Codex、Gemini     | [CodeByAI](https://codebyai.net) |
-| Kimi、GLM、Qwen、DeepSeek | [KimiSeek](https://kimiseek.app) |
 
 ## 贡献与安全
 
