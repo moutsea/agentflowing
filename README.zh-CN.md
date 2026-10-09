@@ -2,6 +2,8 @@
 
 [English](README.md) | 简体中文
 
+[官方网站](https://agentflowing.app) · [GitHub](https://github.com/moutsea/agentflowing)
+
 ![AgentFlowing——构建智能体，为结果付费。](docs/images/agentflowing-hero-zh-CN.png)
 
 一个 Cloudflare 原生的开源模板，用于构建通过订阅和积分计费盈利的 AI Agent SaaS。
@@ -108,6 +110,15 @@ openssl rand -base64 32
 pnpm check
 pnpm exec wrangler deploy --dry-run
 ```
+
+## Vibe Coding 渠道
+
+可以根据你偏好的 AI 编程模型生态选择对应渠道：
+
+| 模型                      | 渠道                             |
+| ------------------------- | -------------------------------- |
+| Claude、Codex、Gemini     | [CodeByAI](https://codebyai.net) |
+| Kimi、GLM、Qwen、DeepSeek | [KimiSeek](https://kimiseek.app) |
 
 ## 配置
 
