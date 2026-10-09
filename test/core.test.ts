@@ -1,4 +1,5 @@
-import { applyD1Migrations, env, SELF } from "cloudflare:test";
+import { applyD1Migrations, env, runInDurableObject, SELF } from "cloudflare:test";
+import type { ChatRecoveryContext } from "@cloudflare/ai-chat";
 import { MessageType } from "@cloudflare/ai-chat/types";
 import type Stripe from "stripe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -986,6 +987,61 @@ describe("agent run billing", () => {
       .first<{ status: string }>();
     expect(stored?.status).toBe("canceled");
   });
+
+  it.each(["running", "completed"] as const)(
+    "handles chat recovery for a %s run without duplicate refunds",
+    async (status) => {
+      const workspace = await seedWorkspace(5);
+      const { agentId, chatId } = await seedRunnableAgent(workspace, 2);
+      const run = await startAgentRun({
+        env,
+        organizationId: workspace.organizationId,
+        agentId,
+        chatId,
+        userId: workspace.userId,
+        idempotencyKey: `chat:${chatId}:request:recovery`,
+        credits: 2,
+      });
+      if (status === "completed") await completeAgentRun({ env, runId: run.id });
+      await env.DB.prepare("UPDATE agent SET credit_cost = 500 WHERE id = ?").bind(agentId).run();
+
+      const context: ChatRecoveryContext = {
+        incidentId: `incident:${run.id}`,
+        recoveryRootRequestId: "recovery-request",
+        attempt: 1,
+        maxAttempts: 3,
+        recoveryKind: "continue",
+        streamId: "interrupted-stream",
+        requestId: "recovery-request",
+        partialText: "",
+        partialParts: [],
+        recoveryData: { billingRunId: run.id },
+        messages: [],
+        createdAt: Date.now(),
+      };
+      const stub = env.MonetizedAgent.getByName(chatId);
+      await runInDurableObject(stub, async (instance) => {
+        await expect(instance.onChatRecovery(context)).resolves.toEqual({});
+        await expect(instance.onChatRecovery({ ...context, attempt: 2 })).resolves.toEqual({});
+      });
+
+      expect(await getAccount(workspace.organizationId)).toEqual({
+        balance: status === "running" ? 5 : 3,
+        lifetimeGranted: 5,
+        lifetimeSpent: status === "running" ? 0 : 2,
+      });
+      const stored = await env.DB.prepare("SELECT status FROM agent_run WHERE id = ?")
+        .bind(run.id)
+        .first<{ status: string }>();
+      expect(stored?.status).toBe(status === "running" ? "canceled" : "completed");
+      const refunds = await env.DB.prepare(
+        "SELECT count(*) AS count FROM credit_ledger WHERE organization_id = ? AND type = 'refund'",
+      )
+        .bind(workspace.organizationId)
+        .first<{ count: number }>();
+      expect(refunds?.count).toBe(status === "running" ? 1 : 0);
+    },
+  );
 
   it("reaps stale running attempts and refunds them once", async () => {
     const workspace = await seedWorkspace(2);

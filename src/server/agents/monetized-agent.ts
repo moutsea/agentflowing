@@ -1,5 +1,6 @@
 import {
   AIChatAgent,
+  type ChatRecoveryConfig,
   type ChatRecoveryContext,
   type ChatRecoveryOptions,
   type OnChatMessageOptions,
@@ -32,7 +33,7 @@ import { and, eq } from "drizzle-orm";
 
 export class MonetizedAgent extends AIChatAgent<Env> {
   override maxPersistedMessages = 100;
-  override chatRecovery = true;
+  override chatRecovery: ChatRecoveryConfig = true;
 
   override async onChatRecovery(context: ChatRecoveryContext): Promise<ChatRecoveryOptions> {
     const recoveryData = context.recoveryData;
