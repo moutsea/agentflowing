@@ -2,6 +2,8 @@
 
 English | [简体中文](README.zh-CN.md)
 
+[Website](https://agentflowing.app) · [GitHub](https://github.com/moutsea/agentflowing)
+
 ![AgentFlowing — Build agents. Charge for outcomes.](docs/images/agentflowing-hero-en.png)
 
 An open-source, Cloudflare-native starter for launching subscription and credit-based AI Agent SaaS products.
@@ -108,6 +110,15 @@ Run the full verification suite:
 pnpm check
 pnpm exec wrangler deploy --dry-run
 ```
+
+## Vibe Coding Channels
+
+Use the channel that matches your preferred AI coding ecosystem:
+
+| Models                        | Channel                          |
+| ----------------------------- | -------------------------------- |
+| Claude, Codex, Gemini         | [CodeByAI](https://codebyai.net) |
+| Kimi, GLM, Qwen, and DeepSeek | [KimiSeek](https://kimiseek.app) |
 
 ## Configuration
 
