@@ -21,6 +21,7 @@ AgentFlowing 将 React 产品界面、Better Auth、组织多租户、持久化�
 - React 19 产品界面，支持英文和简体中文
 - Better Auth 邮箱密码、GitHub/Google OAuth、Magic Link 和密码重置
 - 组织工作空间及 owner/admin/member 权限控制
+- 平台管理员发布的全站通告，支持中英文内容、重要通告横幅和按用户保存的已读/关闭状态
 - Agent 创建、编辑、发布、归档、可见性和模型策略
 - 基于 Cloudflare Agents SDK 与 Durable Objects 的流式对话
 - Workers AI 模型执行，服务端限制输出长度和工具步数
@@ -33,14 +34,15 @@ AgentFlowing 将 React 产品界面、Better Auth、组织多租户、持久化�
 
 ### 功能启用条件
 
-| 能力                  | 默认本地状态   | 额外配置                                     |
-| --------------------- | -------------- | -------------------------------------------- |
-| 邮箱密码              | 已启用         | 设置 `BETTER_AUTH_SECRET`                    |
-| GitHub/Google OAuth   | 未配置时隐藏   | Provider 凭据和回调地址                      |
-| Magic Link/密码重置   | 未配置时隐藏   | Cloudflare Email Sending 域名和 `EMAIL_FROM` |
-| Stripe 订阅           | 保持免费模式   | Stripe 密钥、Price 和 Webhook                |
-| Workers AI            | 已启用远程绑定 | 登录 Cloudflare 并具备账号权限               |
-| D1/R2/Durable Objects | 本地模拟       | 上线前创建生产资源                           |
+| 能力                  | 默认本地状态       | 额外配置                                          |
+| --------------------- | ------------------ | ------------------------------------------------- |
+| 邮箱密码              | 已启用             | 设置 `BETTER_AUTH_SECRET`                         |
+| 全站通告              | 不预置内容或管理员 | 执行迁移；设置 `PLATFORM_ADMIN_USER_IDS` 后可发布 |
+| GitHub/Google OAuth   | 未配置时隐藏       | Provider 凭据和回调地址                           |
+| Magic Link/密码重置   | 未配置时隐藏       | Cloudflare Email Sending 域名和 `EMAIL_FROM`      |
+| Stripe 订阅           | 保持免费模式       | Stripe 密钥、Price 和 Webhook                     |
+| Workers AI            | 已启用远程绑定     | 登录 Cloudflare 并具备账号权限                    |
+| D1/R2/Durable Objects | 本地模拟           | 上线前创建生产资源                                |
 
 默认不强制邮箱验证。模板暂未集成 Turnstile，也未绑定 Cloudflare Workflows；如果你的产品需要更强的注册防护或长任务执行，可以基于现有边界继续扩展。
 
@@ -111,6 +113,29 @@ pnpm check
 pnpm exec wrangler deploy --dry-run
 ```
 
+## 全站通告
+
+平台管理员可在 `/app/admin/notices` 创建草稿、预览、编辑、发布、下线和删除通告。
+支持英文、简体中文或双语内容，缺少一种翻译时自动使用另一种语言。
+所有用户都可在 `/app/notices` 查看已发布内容；访客可从首页进入 `/notices` 查看。
+
+重要通告会显示在工作台顶部，侧边栏显示未读数。已读和关闭状态按用户保存，
+跨设备和工作空间一致。编辑或重新发布会保留已有阅读状态；如需重新提醒所有人，
+请创建新通告。
+
+启用发布功能：
+
+1. 执行数据库迁移，包含 `0005_left_maestro.sql`：本地运行
+   `pnpm db:migrate:local`，生产环境运行 `pnpm db:migrate:remote`。
+2. 登录后打开 `/api/session`，获取自己账号的 `data.user.id`。
+3. 本地在 `.dev.vars` 设置 `PLATFORM_ADMIN_USER_IDS`，多个用户 ID 用逗号分隔。
+   生产环境使用 `pnpm exec wrangler secret put PLATFORM_ADMIN_USER_IDS` 配置。
+4. 修改 `.dev.vars` 后重启本地服务、刷新页面，从侧边栏进入「通告管理」。
+
+管理员名单默认为空，工作空间的 owner/admin 不会自动获得全站发布权限。
+此配置仅供服务端使用，不要添加 `VITE_` 前缀。
+完整行为和接口说明见[通告功能文档](docs/announcements.md#简体中文)。
+
 ## Vibe Coding 渠道
 
 可以根据你偏好的 AI 编程模型生态选择对应渠道：
@@ -134,6 +159,7 @@ AgentFlowing 使用 `wrangler.jsonc` 保存非敏感默认值和 Cloudflare bind
 | `FREE_CREDITS`            | 是   | `100`                   | 新工作空间赠送积分                                        |
 | `MESSAGE_CREDIT_COST`     | 是   | `1`                     | 示例 Agent 初始价格，不得低于模型最低价格                 |
 | `AGENT_RUN_STALE_SECONDS` | 是   | `1800`                  | Cron 收割并退款卡住运行的超时时间                         |
+| `PLATFORM_ADMIN_USER_IDS` | 否   | 空                      | 可管理全站通告的用户 ID，多个用逗号分隔，仅供服务端使用   |
 
 ### 密钥和可选服务商
 
@@ -210,6 +236,9 @@ pnpm exec wrangler email sending dns get mail.your-domain.example
    pnpm deploy
    ```
 
+   升级现有部署时，应先执行 `0005_left_maestro.sql` 迁移，再部署通告功能代码。
+   按上文配置 `PLATFORM_ADMIN_USER_IDS` 后即可启用通告管理页。
+
 6. 配置 Stripe Webhook：
 
    ```text
@@ -261,7 +290,7 @@ src/
 migrations/                   D1 迁移与计费约束
 public/                       静态安全响应头
 test/                         Workers 运行时集成测试
-docs/                         架构和外部 API 文档
+docs/                         架构、外部 API 和通告功能文档
 ```
 
 ## 常用命令

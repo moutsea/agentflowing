@@ -391,6 +391,44 @@ export const agentRun = sqliteTable(
   ],
 );
 
+// Site-wide editorial content; user preferences are global across workspaces.
+export const notice = sqliteTable(
+  "notice",
+  {
+    id: text("id").primaryKey(),
+    title: text("title", { mode: "json" }).$type<{ en: string; zh: string }>().notNull(),
+    content: text("content", { mode: "json" }).$type<{ en: string; zh: string }>().notNull(),
+    priority: text("priority", { enum: ["normal", "important"] })
+      .notNull()
+      .default("normal"),
+    isActive: integer("is_active", { mode: "boolean" }).notNull().default(false),
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    deletedAt: integer("deleted_at", { mode: "timestamp" }),
+    ...timestamps,
+  },
+  (table) => [
+    index("notice_visibility_created_idx").on(table.isActive, table.deletedAt, table.createdAt),
+  ],
+);
+
+export const noticeReadStatus = sqliteTable(
+  "notice_read_status",
+  {
+    noticeId: text("notice_id")
+      .notNull()
+      .references(() => notice.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    readAt: integer("read_at", { mode: "timestamp" }).notNull(),
+    dismissed: integer("dismissed", { mode: "boolean" }).notNull().default(false),
+  },
+  (table) => [
+    uniqueIndex("notice_read_user_notice_uidx").on(table.userId, table.noticeId),
+    index("notice_read_notice_idx").on(table.noticeId),
+  ],
+);
+
 export const memberRelations = relations(member, ({ one }) => ({
   organization: one(organization, {
     fields: [member.organizationId],
@@ -433,6 +471,8 @@ export const schema = {
   fileAsset,
   invitation,
   member,
+  notice,
+  noticeReadStatus,
   organization,
   paymentEvent,
   order,

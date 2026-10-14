@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { HTTPException } from "hono/http-exception";
 import { secureHeaders } from "hono/secure-headers";
 import { routeAgentRequest } from "agents";
 import { and, eq } from "drizzle-orm";
@@ -21,13 +22,14 @@ import { chatRoutes } from "./modules/chats/routes";
 import { fileRoutes } from "./modules/files/routes";
 import { externalApiRoutes } from "./modules/external-api/routes";
 import { resolveWorkspace } from "./modules/workspaces/service";
+import { adminNoticeRoutes, noticeRoutes } from "./modules/notices/routes";
 import { workspaceRoutes } from "./modules/workspaces/routes";
 import type { AppContext } from "./types";
 import { logEvent } from "./observability";
 
 export { MonetizedAgent };
 
-const app = new Hono<AppContext>();
+export const app = new Hono<AppContext>();
 
 app.use("*", observeRequest);
 app.use("*", secureHeaders());
@@ -67,6 +69,8 @@ app.route("/api/billing", billingRoutes);
 app.route("/api/files", fileRoutes);
 app.route("/api/api-keys", apiKeyRoutes);
 app.route("/api/v1", externalApiRoutes);
+app.route("/api/notices", noticeRoutes);
+app.route("/api/admin/notices", adminNoticeRoutes);
 app.route("/api", workspaceRoutes);
 
 app.all("/agents/*", async (context) => {
@@ -115,12 +119,19 @@ app.all("/agents/*", async (context) => {
   }
 
   const response = await routeAgentRequest(context.req.raw, context.env);
-  return response ?? context.json({ error: "Agent not found" }, 404);
+  // Durable Object fetch responses have immutable headers. Preserve the body and
+  // WebSocket upgrade while allowing the outer middleware to add security headers.
+  return response
+    ? new Response(response.body, response)
+    : context.json({ error: "Agent not found" }, 404);
 });
 
 app.notFound((context) => context.json({ error: "Not found" }, 404));
 
 app.onError((error, context) => {
+  if (error instanceof HTTPException && error.status < 500) {
+    return context.json({ error: "invalid_request", message: error.message }, error.status);
+  }
   if (error instanceof RateLimitExceededError) {
     context.header("retry-after", String(error.retryAfterSeconds));
     return context.json({ error: "rate_limited", message: error.message, scope: error.scope }, 429);

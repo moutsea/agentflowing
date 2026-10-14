@@ -1,4 +1,12 @@
-import { Bot, ChevronDown, Coins, LayoutDashboard, LogOut, Settings2 } from "lucide-react";
+import {
+  Bot,
+  Megaphone,
+  ChevronDown,
+  Coins,
+  LayoutDashboard,
+  LogOut,
+  Settings2,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Navigate, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
@@ -7,6 +15,7 @@ import { authClient } from "../auth-client";
 import { apiRequest } from "../lib/api";
 import { WorkspaceContext, type WorkspaceAgent, type WorkspaceSession } from "../workspace";
 import { Brand } from "./brand";
+import { NoticeBanner, NoticeNavLink, NoticeProvider } from "./notices";
 import { LanguageSwitcher } from "./language-switcher";
 
 function initials(value: string) {
@@ -41,7 +50,7 @@ export function AppShell() {
   }, []);
 
   useEffect(() => {
-    if (!authSession?.user) {
+    if (!authSession?.user.id) {
       setSession(null);
       setAgents([]);
       setLoading(false);
@@ -52,8 +61,7 @@ export function AppShell() {
     setError("");
     refreshWorkspace()
       .catch((caught) => {
-        if (active)
-          setError(caught instanceof Error ? caught.message : t("Could not load workspace"));
+        if (active) setError(caught instanceof Error ? caught.message : "Could not load workspace");
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -61,7 +69,7 @@ export function AppShell() {
     return () => {
       active = false;
     };
-  }, [authSession?.user, refreshWorkspace, t]);
+  }, [authSession?.user.id, refreshWorkspace]);
 
   const contextValue = useMemo(
     () => (session ? { session, agents, refreshWorkspace } : null),
@@ -87,7 +95,7 @@ export function AppShell() {
     return (
       <div className="route-state fullscreen">
         <strong>{t("Workspace unavailable")}</strong>
-        <p>{error || t("The workspace could not be initialized.")}</p>
+        <p>{error ? t(error) : t("The workspace could not be initialized.")}</p>
         <button
           className="button button-dark"
           onClick={() => {
@@ -136,88 +144,111 @@ export function AppShell() {
 
   return (
     <WorkspaceContext.Provider value={contextValue}>
-      <div className="app-frame">
-        <aside className="app-sidebar">
-          <div className="sidebar-top">
-            <Brand />
-            <LanguageSwitcher className="sidebar-language" />
-            <div className="workspace-switcher">
-              <span className="workspace-avatar">{initials(activeSession.organization.name)}</span>
-              <span>
-                <strong>{activeSession.organization.name}</strong>
-                <small>{t("{{role}} workspace", { role: t(activeSession.role) })}</small>
-              </span>
-              <ChevronDown size={15} />
-              <select
-                aria-label={t("Active workspace")}
-                disabled={switchingWorkspace}
-                onChange={(event) => void switchWorkspace(event.target.value)}
-                value={activeSession.organization.id}
-              >
-                {activeSession.organizations.map((item) => (
-                  <option key={item.organization.id} value={item.organization.id}>
-                    {item.organization.name} ({t(item.role)})
-                  </option>
-                ))}
-              </select>
-            </div>
-            <nav className="sidebar-nav" aria-label={t("Workspace navigation")}>
-              {navigation.map((item) => {
-                const Icon = item.icon;
-                return (
+      <NoticeProvider key={activeSession.user.id}>
+        <div className="app-frame">
+          <aside className="app-sidebar">
+            <div className="sidebar-top">
+              <Brand />
+              <LanguageSwitcher className="sidebar-language" />
+              <div className="workspace-switcher">
+                <span className="workspace-avatar">
+                  {initials(activeSession.organization.name)}
+                </span>
+                <span>
+                  <strong>{activeSession.organization.name}</strong>
+                  <small>{t("{{role}} workspace", { role: t(activeSession.role) })}</small>
+                </span>
+                <ChevronDown size={15} />
+                <select
+                  aria-label={t("Active workspace")}
+                  disabled={switchingWorkspace}
+                  onChange={(event) => void switchWorkspace(event.target.value)}
+                  value={activeSession.organization.id}
+                >
+                  {activeSession.organizations.map((item) => (
+                    <option key={item.organization.id} value={item.organization.id}>
+                      {item.organization.name} ({t(item.role)})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <nav className="sidebar-nav" aria-label={t("Workspace navigation")}>
+                {navigation.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <NavLink
+                      key={item.label}
+                      to={item.to}
+                      aria-label={item.label}
+                      end={item.end}
+                      className={({ isActive }) =>
+                        isActive ? "sidebar-link active" : "sidebar-link"
+                      }
+                    >
+                      <Icon size={18} strokeWidth={1.8} />
+                      <span>{item.label}</span>
+                    </NavLink>
+                  );
+                })}
+                <NoticeNavLink />
+                {activeSession.isPlatformAdmin && (
                   <NavLink
-                    key={item.label}
-                    to={item.to}
-                    end={item.end}
+                    to="/app/admin/notices"
+                    aria-label={t("Manage announcements")}
                     className={({ isActive }) =>
                       isActive ? "sidebar-link active" : "sidebar-link"
                     }
                   >
-                    <Icon size={18} strokeWidth={1.8} />
-                    <span>{item.label}</span>
+                    <Megaphone size={18} />
+                    <span>{t("Manage announcements")}</span>
                   </NavLink>
-                );
-              })}
-            </nav>
-          </div>
-
-          <div className="sidebar-bottom">
-            <div className="credit-widget">
-              <div>
-                <span className="eyebrow">
-                  <Coins size={13} /> {t("Credits")}
-                </span>
-                <strong>{t("{{count}} available", { count: credits?.balance ?? 0 })}</strong>
-              </div>
-              <div className="credit-track">
-                <span style={{ width: `${creditPercent}%` }} />
-              </div>
-              <NavLink to="/pricing">{t("Upgrade plan")}</NavLink>
+                )}
+              </nav>
             </div>
-            <NavLink to="/app/settings" className="sidebar-link">
-              <Settings2 size={18} strokeWidth={1.8} />
-              <span>{t("Settings")}</span>
-            </NavLink>
-            <button
-              className="user-chip"
-              onClick={() => {
-                void authClient.signOut().then(() => navigate("/", { replace: true }));
-              }}
-              type="button"
-            >
-              <span className="user-avatar">{initials(activeSession.user.name)}</span>
-              <span>
-                <strong>{activeSession.user.name}</strong>
-                <small>{activeSession.user.email}</small>
-              </span>
-              <LogOut size={15} className="user-menu-icon" />
-            </button>
-          </div>
-        </aside>
-        <main className="app-main">
-          <Outlet />
-        </main>
-      </div>
+
+            <div className="sidebar-bottom">
+              <div className="credit-widget">
+                <div>
+                  <span className="eyebrow">
+                    <Coins size={13} /> {t("Credits")}
+                  </span>
+                  <strong>{t("{{count}} available", { count: credits?.balance ?? 0 })}</strong>
+                </div>
+                <div className="credit-track">
+                  <span style={{ width: `${creditPercent}%` }} />
+                </div>
+                <NavLink to="/pricing">{t("Upgrade plan")}</NavLink>
+              </div>
+              <NavLink to="/app/settings" className="sidebar-link">
+                <Settings2 size={18} strokeWidth={1.8} />
+                <span>{t("Settings")}</span>
+              </NavLink>
+              <button
+                className="user-chip"
+                onClick={() => {
+                  void authClient.signOut().then(() => navigate("/", { replace: true }));
+                }}
+                type="button"
+              >
+                <span className="user-avatar">{initials(activeSession.user.name)}</span>
+                <span>
+                  <strong>{activeSession.user.name}</strong>
+                  <small>{activeSession.user.email}</small>
+                </span>
+                <LogOut size={15} className="user-menu-icon" />
+              </button>
+            </div>
+          </aside>
+          <main
+            className={
+              location.pathname.startsWith("/app/chats/") ? "app-main app-main-chat" : "app-main"
+            }
+          >
+            <NoticeBanner />
+            <Outlet />
+          </main>
+        </div>
+      </NoticeProvider>
     </WorkspaceContext.Provider>
   );
 }

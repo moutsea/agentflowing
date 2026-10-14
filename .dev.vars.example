@@ -1,6 +1,10 @@
 # Required for Better Auth. Generate with: openssl rand -base64 32
 BETTER_AUTH_SECRET=replace-with-at-least-32-random-characters
 
+# Optional platform administrators: comma-separated immutable user IDs.
+# Get your own ID from /api/session after signing in. Workspace roles do not grant this access.
+PLATFORM_ADMIN_USER_IDS=
+
 # Optional OAuth providers. Each provider requires both values.
 GITHUB_CLIENT_ID=
 GITHUB_CLIENT_SECRET=

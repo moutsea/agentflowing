@@ -21,6 +21,7 @@ Most Agent demos stop at a chat box. A commercial product also needs identity, t
 - React 19 product UI with English and Simplified Chinese localization
 - Better Auth email/password, GitHub/Google OAuth, Magic Link, and password reset
 - Organization workspaces with owner/admin/member authorization
+- Site-wide announcements with platform-admin publishing, bilingual content, important banners, and per-user read/dismiss state
 - Agent catalog with create, edit, publish, archive, visibility, and model policies
 - Streaming conversations using Cloudflare Agents SDK and Durable Objects
 - Workers AI model execution with server-controlled output and tool-step limits
@@ -33,14 +34,15 @@ Most Agent demos stop at a chat box. A commercial product also needs identity, t
 
 ### Feature availability
 
-| Capability                | Default local setup     | Additional setup                                 |
-| ------------------------- | ----------------------- | ------------------------------------------------ |
-| Email/password            | Enabled                 | Set `BETTER_AUTH_SECRET`                         |
-| GitHub/Google OAuth       | Hidden until configured | Provider credentials and callback URLs           |
-| Magic Link/password reset | Hidden until configured | Cloudflare Email Sending domain and `EMAIL_FROM` |
-| Stripe subscriptions      | UI remains in free mode | Stripe keys, prices, and webhook                 |
-| Workers AI                | Remote binding enabled  | Cloudflare login/account access                  |
-| D1/R2/Durable Objects     | Local emulation         | Provision production resources before deploy     |
+| Capability                | Default local setup     | Additional setup                                                     |
+| ------------------------- | ----------------------- | -------------------------------------------------------------------- |
+| Email/password            | Enabled                 | Set `BETTER_AUTH_SECRET`                                             |
+| Site-wide announcements   | No seeded content/admin | Apply migrations; set `PLATFORM_ADMIN_USER_IDS` to enable publishing |
+| GitHub/Google OAuth       | Hidden until configured | Provider credentials and callback URLs                               |
+| Magic Link/password reset | Hidden until configured | Cloudflare Email Sending domain and `EMAIL_FROM`                     |
+| Stripe subscriptions      | UI remains in free mode | Stripe keys, prices, and webhook                                     |
+| Workers AI                | Remote binding enabled  | Cloudflare login/account access                                      |
+| D1/R2/Durable Objects     | Local emulation         | Provision production resources before deploy                         |
 
 Email verification is not required by default. Turnstile and a Cloudflare Workflow binding are not included yet; both are extension points for products that need stronger signup protection or long-running jobs.
 
@@ -111,6 +113,35 @@ pnpm check
 pnpm exec wrangler deploy --dry-run
 ```
 
+## Announcements
+
+Platform administrators can create drafts, preview, edit, publish, take offline,
+and delete announcements at `/app/admin/notices`. Content supports English,
+Simplified Chinese, or both, with a fallback when one translation is missing.
+All users can read published announcements at `/app/notices`; guests can use
+`/notices` from the home page.
+
+Important announcements also appear in the workspace banner, and the sidebar
+shows the unread count. Read/dismiss state is saved per user across devices and
+workspaces. Editing or republishing a notice keeps its existing read state;
+create a new notice to alert everyone again.
+
+To enable publishing:
+
+1. Apply the database migrations, including `0005_left_maestro.sql`:
+   `pnpm db:migrate:local` locally or `pnpm db:migrate:remote` for production.
+2. Sign in and open `/api/session` to find your account's `data.user.id`.
+3. Set `PLATFORM_ADMIN_USER_IDS` in `.dev.vars` to that user ID; separate multiple
+   IDs with commas. In production, use
+   `pnpm exec wrangler secret put PLATFORM_ADMIN_USER_IDS`.
+4. Restart local development after changing `.dev.vars`, refresh the app, and
+   open **Manage announcements** in the sidebar.
+
+The administrator list is empty by default. Workspace owners/admins do not
+automatically receive platform privileges. Keep this setting on the server;
+do not give it a `VITE_` prefix.
+See [the announcement guide](docs/announcements.md) for setup, API contracts, and behavior.
+
 ## Vibe Coding Channels
 
 Use the channel that matches your preferred AI coding ecosystem:
@@ -126,14 +157,15 @@ AgentFlowing uses `wrangler.jsonc` for non-sensitive defaults and Cloudflare bin
 
 ### Application variables
 
-| Variable                  | Required | Default                 | Purpose                                                         |
-| ------------------------- | -------- | ----------------------- | --------------------------------------------------------------- |
-| `APP_NAME`                | Yes      | `AgentFlowing`          | Product name used by the Worker and auth emails                 |
-| `APP_URL`                 | Yes      | `http://localhost:5173` | Canonical origin for Better Auth, Stripe, and redirects         |
-| `DEFAULT_AI_MODEL`        | Yes      | GLM 4.7 Flash           | Starter Agent model; must exist in `src/shared/ai-models.ts`    |
-| `FREE_CREDITS`            | Yes      | `100`                   | Credits granted to a new workspace                              |
-| `MESSAGE_CREDIT_COST`     | Yes      | `1`                     | Initial sample Agent cost, bounded by the model minimum         |
-| `AGENT_RUN_STALE_SECONDS` | Yes      | `1800`                  | Age after which the cron reaper cancels and refunds a stuck run |
+| Variable                  | Required | Default                 | Purpose                                                                         |
+| ------------------------- | -------- | ----------------------- | ------------------------------------------------------------------------------- |
+| `APP_NAME`                | Yes      | `AgentFlowing`          | Product name used by the Worker and auth emails                                 |
+| `APP_URL`                 | Yes      | `http://localhost:5173` | Canonical origin for Better Auth, Stripe, and redirects                         |
+| `DEFAULT_AI_MODEL`        | Yes      | GLM 4.7 Flash           | Starter Agent model; must exist in `src/shared/ai-models.ts`                    |
+| `FREE_CREDITS`            | Yes      | `100`                   | Credits granted to a new workspace                                              |
+| `MESSAGE_CREDIT_COST`     | Yes      | `1`                     | Initial sample Agent cost, bounded by the model minimum                         |
+| `AGENT_RUN_STALE_SECONDS` | Yes      | `1800`                  | Age after which the cron reaper cancels and refunds a stuck run                 |
+| `PLATFORM_ADMIN_USER_IDS` | No       | Empty                   | Comma-separated user IDs allowed to manage site-wide announcements; server only |
 
 ### Secrets and optional providers
 
@@ -210,6 +242,10 @@ After publishing the required DNS records, set `EMAIL_FROM` to an address on the
    pnpm deploy
    ```
 
+   When upgrading an existing installation, apply migration `0005_left_maestro.sql`
+   before deploying the announcement feature. Configure `PLATFORM_ADMIN_USER_IDS`
+   as described above to enable the management page.
+
 6. Configure the Stripe webhook at:
 
    ```text
@@ -261,7 +297,7 @@ src/
 migrations/                   D1 migrations and accounting invariants
 public/                       Static security headers
 test/                         Workers-runtime integration tests
-docs/                         Architecture and external API notes
+docs/                         Architecture, external API, and announcement guides
 ```
 
 ## Common Commands

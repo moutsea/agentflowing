@@ -29,6 +29,7 @@ export type WorkspaceSession = {
     slug: string;
     logo?: string | null;
   };
+  isPlatformAdmin: boolean;
   role: string;
   credits?: {
     balance: number;
