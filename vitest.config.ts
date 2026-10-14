@@ -8,6 +8,8 @@ export default defineConfig({
       wrangler: { configPath: "./wrangler.jsonc" },
       miniflare: {
         bindings: {
+          APP_URL: "http://localhost:5173",
+          PLATFORM_ADMIN_USER_IDS: "",
           BETTER_AUTH_SECRET: "agentflowing-test-secret-at-least-32-characters",
         },
       },

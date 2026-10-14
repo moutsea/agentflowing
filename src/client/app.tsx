@@ -10,6 +10,8 @@ import { AgentsPage } from "./pages/agents-page";
 import { DashboardPage } from "./pages/dashboard-page";
 import { LandingPage } from "./pages/landing-page";
 import { PricingPage } from "./pages/pricing-page";
+import { NoticesPage } from "./pages/notices-page";
+import { AdminNoticesPage } from "./pages/admin-notices-page";
 import { SettingsPage } from "./pages/settings-page";
 
 const AgentPage = lazy(async () => ({
@@ -30,6 +32,7 @@ export function App() {
     >
       <Routes>
         <Route path="/" element={<LandingPage />} />
+        <Route path="/notices" element={<NoticesPage publicView />} />
         <Route path="/pricing" element={<PricingPage />} />
         <Route path="/sign-in" element={<AuthPage mode="sign-in" />} />
         <Route path="/sign-up" element={<AuthPage mode="sign-up" />} />
@@ -42,6 +45,8 @@ export function App() {
           <Route path="/app/agents/:agentId" element={<AgentEditorPage />} />
           <Route path="/app/agents/:agentId/run" element={<AgentLauncherPage />} />
           <Route path="/app/chats/:chatId" element={<AgentPage />} />
+          <Route path="/app/notices" element={<NoticesPage />} />
+          <Route path="/app/admin/notices" element={<AdminNoticesPage />} />
           <Route path="/app/settings" element={<SettingsPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />

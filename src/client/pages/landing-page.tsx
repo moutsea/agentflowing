@@ -57,6 +57,7 @@ export function LandingPage() {
         <nav aria-label={t("Main navigation")}>
           <a href="#product">{t("Product")}</a>
           <a href="#architecture">{t("Architecture")}</a>
+          <Link to="/notices">{t("Announcements")}</Link>
           <Link to="/pricing">{t("Pricing")}</Link>
           <a href="https://github.com" target="_blank" rel="noreferrer">
             GitHub

@@ -145,3 +145,18 @@ Next.js is a good SaaS UI framework, but it adds an adapter and server-runtime
 surface that is unnecessary for this starter. Vite, React, Hono, and the
 Cloudflare Vite plugin produce one deployable Worker while keeping the client
 and server module boundaries explicit.
+
+## Site-wide announcements
+
+Announcements are intentionally global editorial content, not tenant-owned data.
+Publishing requires an authenticated user whose immutable ID appears in the
+server-side `PLATFORM_ADMIN_USER_IDS` allowlist. Organization owner/admin roles
+never confer this capability; the allowlist is not returned to the browser.
+`/api/session` returns only the current user's `isPlatformAdmin` capability.
+
+D1 stores announcements and per-user read/dismiss preferences. A unique
+`(user_id, notice_id)` index and a conditional upsert make retries/concurrent
+reads safe without clearing a previous dismissal. Preferences follow the user
+across workspaces. Only active, non-deleted notices are public. Soft deletion
+is distinct from taking a notice offline and cannot be undone through the API.
+Read endpoints return explicit DTOs without author IDs or deletion metadata.

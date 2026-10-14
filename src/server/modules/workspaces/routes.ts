@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 
 import { createAuth } from "../../auth";
+import { isPlatformAdmin } from "../../middleware/platform-admin";
 import { requireAuth } from "../../middleware/auth";
 import { getCreditSummary } from "../billing/service";
 import type { AppContext } from "../../types";
@@ -25,6 +26,7 @@ workspaceRoutes.get("/session", async (context) => {
       user: identity.user,
       organization: identity.organization,
       role: identity.role,
+      isPlatformAdmin: isPlatformAdmin(context.env, identity.user.id),
       credits: credits.account,
       organizations,
     },

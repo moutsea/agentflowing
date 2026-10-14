@@ -19,7 +19,7 @@ import {
   Zap,
 } from "lucide-react";
 import { useAgent } from "agents/react";
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { Link, useParams } from "react-router-dom";
 
@@ -111,7 +111,19 @@ export function AgentPage() {
     );
   }
 
-  return <AgentConversation chat={chat} />;
+  return (
+    <Suspense
+      fallback={
+        <div className="route-state">
+          <span className="route-loader" />
+          <strong>{t("Opening durable conversation")}</strong>
+          <p>{t("Restoring messages and connection state…")}</p>
+        </div>
+      }
+    >
+      <AgentConversation key={chat.id} chat={chat} />
+    </Suspense>
+  );
 }
 
 function AgentConversation({ chat }: { chat: ChatDetail }) {
