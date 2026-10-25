@@ -22,6 +22,27 @@ STRIPE_WEBHOOK_SECRET=
 STRIPE_PRO_PRICE_ID=
 STRIPE_SCALE_PRICE_ID=
 
+# Optional WeChat Pay / Alipay QR packs. Both wallets also need to be enabled in
+# the Stripe dashboard for this account; without STRIPE_SECRET_KEY the pricing
+# page simply keeps offering card checkout.
+# Prices are charged at list price in DIRECT_QR_CURRENCY with no conversion, so
+# keep it the currency the plan prices are already written in.
+DIRECT_QR_PAYMENT_MODE=all
+DIRECT_QR_CURRENCY=usd
+# How long an unpaid code stays payable before the scheduled sweep cancels it.
+# DIRECT_QR_ORDER_STALE_SECONDS=1800
+
+# Traffic analytics is on by default: the SPA reports one page view per route
+# change and platform admins read the dashboard at /app/admin/analytics.
+# Optional salt for the visitor hash. Without it the hash falls back to
+# BETTER_AUTH_SECRET. It is stable on purpose: rotating it per calendar month
+# would make one person count as two across a month boundary, which is exactly
+# what the unique-visitor number must not do. Set it to a fresh value to cut
+# visitor continuity from that point on. Leaving it unset means the hash uses
+# BETTER_AUTH_SECRET, so rotating that secret also resets visitor continuity;
+# a one-off warning is logged when that fallback is in use.
+# ANALYTICS_SALT=
+
 # Non-sensitive defaults live in wrangler.jsonc. Uncomment only to override locally.
 # APP_NAME=AgentFlowing
 # APP_URL=http://localhost:5173
@@ -29,3 +50,6 @@ STRIPE_SCALE_PRICE_ID=
 # FREE_CREDITS=100
 # MESSAGE_CREDIT_COST=1
 # AGENT_RUN_STALE_SECONDS=1800
+# ANALYTICS_RETENTION_DAYS=180
+# IANA zone that decides when a dashboard day rolls over, e.g. Asia/Shanghai.
+# ANALYTICS_TIME_ZONE=Asia/Shanghai

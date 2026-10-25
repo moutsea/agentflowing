@@ -11,6 +11,7 @@ import { logEvent } from "../../observability";
 import type { AppContext } from "../../types";
 import { requireWorkspaceManager } from "../workspaces/permissions";
 import { getPublicCatalog } from "./catalog";
+import { directQrRoutes } from "./direct-qr-routes";
 import {
   createStripeCheckout,
   createStripePortal,
@@ -91,6 +92,10 @@ billingRoutes.get("/subscription", requireAuth, async (context) => {
     .limit(1);
   return context.json({ data: item ?? null });
 });
+
+// The direct-QR flow is keyed by PaymentIntent rather than Checkout Session, so
+// it lives in its own router; it is still part of the same billing surface.
+billingRoutes.route("/qr", directQrRoutes);
 
 billingRoutes.post("/webhooks/stripe", async (context) => {
   await enforceRateLimit({

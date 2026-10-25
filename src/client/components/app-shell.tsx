@@ -1,4 +1,5 @@
 import {
+  BarChart3,
   Bot,
   Megaphone,
   ChevronDown,
@@ -192,16 +193,28 @@ export function AppShell() {
                 })}
                 <NoticeNavLink />
                 {activeSession.isPlatformAdmin && (
-                  <NavLink
-                    to="/app/admin/notices"
-                    aria-label={t("Manage announcements")}
-                    className={({ isActive }) =>
-                      isActive ? "sidebar-link active" : "sidebar-link"
-                    }
-                  >
-                    <Megaphone size={18} />
-                    <span>{t("Manage announcements")}</span>
-                  </NavLink>
+                  <>
+                    <NavLink
+                      to="/app/admin/notices"
+                      aria-label={t("Manage announcements")}
+                      className={({ isActive }) =>
+                        isActive ? "sidebar-link active" : "sidebar-link"
+                      }
+                    >
+                      <Megaphone size={18} />
+                      <span>{t("Manage announcements")}</span>
+                    </NavLink>
+                    <NavLink
+                      to="/app/admin/analytics"
+                      aria-label={t("Traffic analytics")}
+                      className={({ isActive }) =>
+                        isActive ? "sidebar-link active" : "sidebar-link"
+                      }
+                    >
+                      <BarChart3 size={18} />
+                      <span>{t("Traffic analytics")}</span>
+                    </NavLink>
+                  </>
                 )}
               </nav>
             </div>

@@ -1,0 +1,2 @@
+ALTER TABLE `order` ADD `last_reconcile_attempt_at` integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+CREATE INDEX `order_reconcile_idx` ON `order` (`provider`,`kind`,`status`,`last_reconcile_attempt_at`,`createdAt`,`id`);

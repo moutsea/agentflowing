@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Navigate, Route, Routes } from "react-router-dom";
 
 import { AppShell } from "./components/app-shell";
+import { usePageViewTracking } from "./lib/analytics";
 import { AgentLauncherPage } from "./pages/agent-launcher-page";
 import { AgentEditorPage } from "./pages/agent-editor-page";
 import { AuthPage, ForgotPasswordPage, ResetPasswordPage } from "./pages/auth-page";
@@ -11,6 +12,7 @@ import { DashboardPage } from "./pages/dashboard-page";
 import { LandingPage } from "./pages/landing-page";
 import { PricingPage } from "./pages/pricing-page";
 import { NoticesPage } from "./pages/notices-page";
+import { AdminAnalyticsPage } from "./pages/admin-analytics-page";
 import { AdminNoticesPage } from "./pages/admin-notices-page";
 import { SettingsPage } from "./pages/settings-page";
 
@@ -20,6 +22,9 @@ const AgentPage = lazy(async () => ({
 
 export function App() {
   const { t } = useTranslation();
+  // `App` is rendered inside `<BrowserRouter>` (see main.tsx), so the router
+  // context the tracker needs is available here.
+  usePageViewTracking();
 
   return (
     <Suspense
@@ -47,6 +52,7 @@ export function App() {
           <Route path="/app/chats/:chatId" element={<AgentPage />} />
           <Route path="/app/notices" element={<NoticesPage />} />
           <Route path="/app/admin/notices" element={<AdminNoticesPage />} />
+          <Route path="/app/admin/analytics" element={<AdminAnalyticsPage />} />
           <Route path="/app/settings" element={<SettingsPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />

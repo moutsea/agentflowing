@@ -1,6 +1,8 @@
 import { relations, sql } from "drizzle-orm";
 import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
+import { ANALYTICS_DEVICES, ANALYTICS_SOURCES } from "../../shared/analytics";
+
 const timestamps = {
   createdAt: integer("createdAt", { mode: "timestamp" })
     .default(sql`(unixepoch())`)
@@ -274,11 +276,21 @@ export const order = sqliteTable(
       .notNull()
       .default("created"),
     paidAt: integer("paid_at", { mode: "timestamp" }),
+    /** Last reconciliation attempt, including failures; zero means never attempted. */
+    lastReconcileAttemptAt: integer("last_reconcile_attempt_at").notNull().default(0),
     ...timestamps,
   },
   (table) => [
     uniqueIndex("order_provider_session_uidx").on(table.provider, table.providerSessionId),
     index("order_org_created_idx").on(table.organizationId, table.createdAt),
+    index("order_reconcile_idx").on(
+      table.provider,
+      table.kind,
+      table.status,
+      table.lastReconcileAttemptAt,
+      table.createdAt,
+      table.id,
+    ),
   ],
 );
 
@@ -429,6 +441,43 @@ export const noticeReadStatus = sqliteTable(
   ],
 );
 
+/**
+ * One row per reported page view.
+ *
+ * Rows are stored raw rather than pre-aggregated because "unique visitors" is a
+ * distinct count over an arbitrary range, and a rollup table would have to keep
+ * one sketch per (day, dimension) combination to answer it. The table is kept
+ * small by a retention sweep instead — see `purgeExpiredAnalytics`.
+ *
+ * `visitorKey` is a salted hash, never an address: the salt rotates monthly, so
+ * the same person cannot be followed beyond the month they were seen in.
+ */
+export const analyticsVisit = sqliteTable(
+  "analytics_visit",
+  {
+    id: text("id").primaryKey(),
+    /** UTC calendar day, `YYYY-MM-DD`, so grouping needs no date arithmetic. */
+    day: text("day").notNull(),
+    path: text("path").notNull(),
+    visitorKey: text("visitor_key").notNull(),
+    source: text("source", { enum: ANALYTICS_SOURCES }).notNull(),
+    /** Referrer hostname, or the matched search engine / social network. */
+    sourceHost: text("source_host"),
+    campaign: text("campaign"),
+    medium: text("medium"),
+    /** ISO 3166-1 alpha-2 from Cloudflare, empty when unknown. */
+    country: text("country"),
+    device: text("device", { enum: ANALYTICS_DEVICES }).notNull(),
+    createdAt: integer("created_at").notNull(),
+  },
+  (table) => [
+    index("analytics_visit_day_idx").on(table.day),
+    index("analytics_visit_day_source_idx").on(table.day, table.source),
+    index("analytics_visit_day_path_idx").on(table.day, table.path),
+    index("analytics_visit_visitor_day_idx").on(table.visitorKey, table.day),
+  ],
+);
+
 export const memberRelations = relations(member, ({ one }) => ({
   organization: one(organization, {
     fields: [member.organizationId],
@@ -464,6 +513,7 @@ export const schema = {
   account,
   agent,
   agentRun,
+  analyticsVisit,
   apiKey,
   chat,
   creditAccount,

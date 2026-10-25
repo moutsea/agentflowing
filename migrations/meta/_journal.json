@@ -43,6 +43,20 @@
       "when": 1791947193754,
       "tag": "0005_left_maestro",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1792884222032,
+      "tag": "0006_dizzy_tyrannus",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1792924983649,
+      "tag": "0007_direct_qr_reconciliation",
+      "breakpoints": true
     }
   ]
 }

@@ -1,7 +1,13 @@
 import Stripe from "stripe";
 
 import { readRuntimeString } from "../../env";
+import { logEvent } from "../../observability";
 import { getPaidPlan, getPlan } from "./catalog";
+import { isDirectQrIntent } from "./direct-qr";
+// Circular with this module: `direct-qr-service` builds its intents with the
+// client factory below. Only request handlers touch either binding, so the
+// cycle resolves before anything is called.
+import { DirectQrUnfulfillableError, fulfillDirectQrIntent } from "./direct-qr-service";
 
 type StoredOrder = {
   id: string;
@@ -31,7 +37,7 @@ export class StripeWebhookInProgressError extends Error {
 
 export const STRIPE_WEBHOOK_LEASE_SECONDS = 5 * 60;
 
-function createStripe(env: Env) {
+export function createStripe(env: Env) {
   const secretKey = readRuntimeString(env, "STRIPE_SECRET_KEY");
   if (!secretKey) throw new StripeConfigurationError("Stripe is not configured");
   return new Stripe(secretKey, {
@@ -226,6 +232,46 @@ async function dispatchStripeEvent(env: Env, event: Stripe.Event) {
     case "invoice.payment_failed":
       await markSubscriptionPastDue(env, event.id, event.data.object);
       return;
+    // Checkout creates PaymentIntents too, and Stripe emits payment_intent.*
+    // for them; those are credited through checkout.session.*, so only intents
+    // stamped by the direct-QR flow are ours to handle here.
+    case "payment_intent.succeeded":
+      if (!isDirectQrIntent(event.data.object)) {
+        await markEventCompleted(env, event.id);
+        return;
+      }
+      // The completion marker rides along with the grant, so the event can never
+      // be marked done while the credits are still missing.
+      try {
+        await fulfillDirectQrIntent(env, event.data.object, event.id);
+      } catch (error) {
+        // An intent whose order is gone (or disagrees with it) will never
+        // become grantable. Retrying keeps the event pending forever and blocks
+        // every later event behind Stripe's retry schedule, so give up loudly
+        // instead — the log line is the only way a human can find this money.
+        if (!(error instanceof DirectQrUnfulfillableError)) throw error;
+        logEvent("error", "billing.direct_qr_unfulfillable", {
+          eventId: event.id,
+          paymentIntentId: event.data.object.id,
+          message: error.message,
+        });
+        await markEventCompleted(env, event.id);
+      }
+      return;
+    case "payment_intent.payment_failed":
+    case "payment_intent.canceled":
+      if (!isDirectQrIntent(event.data.object)) {
+        await markEventCompleted(env, event.id);
+        return;
+      }
+      await env.DB.batch([
+        env.DB.prepare(
+          `UPDATE "order" SET status = 'failed', updatedAt = unixepoch()
+           WHERE provider_session_id = ? AND status <> 'paid'`,
+        ).bind(event.data.object.id),
+        completedEventStatement(env, event.id),
+      ]);
+      return;
     default:
       await markEventCompleted(env, event.id);
   }
@@ -407,7 +453,7 @@ async function findStoredSubscription(env: Env, subscriptionId: string) {
     .first<StoredSubscription>();
 }
 
-function completedEventStatement(env: Env, eventId: string) {
+export function completedEventStatement(env: Env, eventId: string) {
   return env.DB.prepare(
     `UPDATE payment_event SET status = 'completed', error = NULL, updatedAt = unixepoch()
      WHERE provider = 'stripe' AND provider_event_id = ?`,

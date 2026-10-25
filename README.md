@@ -27,6 +27,8 @@ Most Agent demos stop at a chat box. A commercial product also needs identity, t
 - Workers AI model execution with server-controlled output and tool-step limits
 - Immutable D1 credit ledger with overdraft protection and idempotent charges/refunds
 - Stripe Checkout, customer portal, subscription webhooks, and recurring credit grants
+- In-page WeChat Pay and Alipay QR codes for one-time credit packs, with Stripe as the processor
+- Traffic analytics for platform admins: page views, unique visitors, trend chart, and acquisition sources
 - R2 file uploads with tenant checks, MIME validation, and size limits
 - Scoped, hashed API keys for server-to-server Agent execution
 - Cloudflare Rate Limiting, request IDs, structured logs, CSP, and security headers
@@ -34,15 +36,17 @@ Most Agent demos stop at a chat box. A commercial product also needs identity, t
 
 ### Feature availability
 
-| Capability                | Default local setup     | Additional setup                                                     |
-| ------------------------- | ----------------------- | -------------------------------------------------------------------- |
-| Email/password            | Enabled                 | Set `BETTER_AUTH_SECRET`                                             |
-| Site-wide announcements   | No seeded content/admin | Apply migrations; set `PLATFORM_ADMIN_USER_IDS` to enable publishing |
-| GitHub/Google OAuth       | Hidden until configured | Provider credentials and callback URLs                               |
-| Magic Link/password reset | Hidden until configured | Cloudflare Email Sending domain and `EMAIL_FROM`                     |
-| Stripe subscriptions      | UI remains in free mode | Stripe keys, prices, and webhook                                     |
-| Workers AI                | Remote binding enabled  | Cloudflare login/account access                                      |
-| D1/R2/Durable Objects     | Local emulation         | Provision production resources before deploy                         |
+| Capability                | Default local setup     | Additional setup                                                      |
+| ------------------------- | ----------------------- | --------------------------------------------------------------------- |
+| Email/password            | Enabled                 | Set `BETTER_AUTH_SECRET`                                              |
+| Site-wide announcements   | No seeded content/admin | Apply migrations; set `PLATFORM_ADMIN_USER_IDS` to enable publishing  |
+| GitHub/Google OAuth       | Hidden until configured | Provider credentials and callback URLs                                |
+| Magic Link/password reset | Hidden until configured | Cloudflare Email Sending domain and `EMAIL_FROM`                      |
+| Stripe subscriptions      | UI remains in free mode | Stripe keys, prices, and webhook                                      |
+| WeChat Pay/Alipay QR      | UI remains in free mode | Stripe key, configured plan Price IDs, and wallets enabled in Stripe  |
+| Traffic analytics         | Collecting, admin-only  | Apply migrations; set `PLATFORM_ADMIN_USER_IDS` to read the dashboard |
+| Workers AI                | Remote binding enabled  | Cloudflare login/account access                                       |
+| D1/R2/Durable Objects     | Local emulation         | Provision production resources before deploy                          |
 
 Email verification is not required by default. Turnstile and a Cloudflare Workflow binding are not included yet; both are extension points for products that need stronger signup protection or long-running jobs.
 
@@ -157,29 +161,42 @@ AgentFlowing uses `wrangler.jsonc` for non-sensitive defaults and Cloudflare bin
 
 ### Application variables
 
-| Variable                  | Required | Default                 | Purpose                                                                         |
-| ------------------------- | -------- | ----------------------- | ------------------------------------------------------------------------------- |
-| `APP_NAME`                | Yes      | `AgentFlowing`          | Product name used by the Worker and auth emails                                 |
-| `APP_URL`                 | Yes      | `http://localhost:5173` | Canonical origin for Better Auth, Stripe, and redirects                         |
-| `DEFAULT_AI_MODEL`        | Yes      | GLM 4.7 Flash           | Starter Agent model; must exist in `src/shared/ai-models.ts`                    |
-| `FREE_CREDITS`            | Yes      | `100`                   | Credits granted to a new workspace                                              |
-| `MESSAGE_CREDIT_COST`     | Yes      | `1`                     | Initial sample Agent cost, bounded by the model minimum                         |
-| `AGENT_RUN_STALE_SECONDS` | Yes      | `1800`                  | Age after which the cron reaper cancels and refunds a stuck run                 |
-| `PLATFORM_ADMIN_USER_IDS` | No       | Empty                   | Comma-separated user IDs allowed to manage site-wide announcements; server only |
+| Variable                        | Required | Default                 | Purpose                                                                              |
+| ------------------------------- | -------- | ----------------------- | ------------------------------------------------------------------------------------ |
+| `APP_NAME`                      | Yes      | `AgentFlowing`          | Product name used by the Worker and auth emails                                      |
+| `APP_URL`                       | Yes      | `http://localhost:5173` | Canonical origin for Better Auth, Stripe, and redirects                              |
+| `DEFAULT_AI_MODEL`              | Yes      | GLM 4.7 Flash           | Starter Agent model; must exist in `src/shared/ai-models.ts`                         |
+| `FREE_CREDITS`                  | Yes      | `100`                   | Credits granted to a new workspace                                                   |
+| `MESSAGE_CREDIT_COST`           | Yes      | `1`                     | Initial sample Agent cost, bounded by the model minimum                              |
+| `AGENT_RUN_STALE_SECONDS`       | Yes      | `1800`                  | Age after which the cron reaper cancels and refunds a stuck run                      |
+| `PLATFORM_ADMIN_USER_IDS`       | No       | Empty                   | Comma-separated user IDs allowed to manage site-wide announcements; server only      |
+| `DIRECT_QR_PAYMENT_MODE`        | No       | `all`                   | Who can pay by QR: `off`, `admins` (`PLATFORM_ADMIN_USER_IDS` only), or `all`        |
+| `DIRECT_QR_CURRENCY`            | No       | `usd`                   | Currency the credit packs are charged in, at list price with no conversion           |
+| `DIRECT_QR_ORDER_STALE_SECONDS` | No       | `1800`                  | Age after which the cron reaper cancels an unpaid QR code and its order              |
+| `ANALYTICS_RETENTION_DAYS`      | No       | `180`                   | Days of page-view history kept; the cron purge deletes older rows (floor of 7)       |
+| `ANALYTICS_TIME_ZONE`           | No       | `UTC`                   | IANA zone that decides when a day rolls over on the dashboard (e.g. `Asia/Shanghai`) |
+
+Credit packs are charged at `monthlyPrice` in `DIRECT_QR_CURRENCY`, one to one:
+there is no exchange-rate step. Set it to the currency your plan prices and your
+Stripe subscription prices are already denominated in, or a `cny` setting would
+sell a `$29` plan for `¥29`. It is also the currency the pricing page prints
+prices in (the catalog response carries it, so prices and currency arrive
+together), so the two paths stay consistent.
 
 ### Secrets and optional providers
 
-| Variable                                        | Required | Purpose                                                        |
-| ----------------------------------------------- | -------- | -------------------------------------------------------------- |
-| `BETTER_AUTH_SECRET`                            | Yes      | Better Auth signing/encryption secret; minimum 32 characters   |
-| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET`     | No       | Enables GitHub OAuth when both are set                         |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`     | No       | Enables Google OAuth when both are set                         |
-| `EMAIL_FROM`                                    | No       | Enables Magic Link and password reset with the `EMAIL` binding |
-| `EMAIL_FROM_NAME`                               | No       | Authentication email sender name                               |
-| `MAGIC_LINK_EXPIRES_SECONDS`                    | No       | Magic Link lifetime; defaults to 900 seconds                   |
-| `STRIPE_SECRET_KEY`                             | No       | Enables Stripe checkout and customer portal                    |
-| `STRIPE_WEBHOOK_SECRET`                         | No       | Verifies Stripe webhook signatures                             |
-| `STRIPE_PRO_PRICE_ID` / `STRIPE_SCALE_PRICE_ID` | No       | Server-authoritative recurring prices                          |
+| Variable                                        | Required | Purpose                                                              |
+| ----------------------------------------------- | -------- | -------------------------------------------------------------------- |
+| `BETTER_AUTH_SECRET`                            | Yes      | Better Auth signing/encryption secret; minimum 32 characters         |
+| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET`     | No       | Enables GitHub OAuth when both are set                               |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`     | No       | Enables Google OAuth when both are set                               |
+| `EMAIL_FROM`                                    | No       | Enables Magic Link and password reset with the `EMAIL` binding       |
+| `EMAIL_FROM_NAME`                               | No       | Authentication email sender name                                     |
+| `MAGIC_LINK_EXPIRES_SECONDS`                    | No       | Magic Link lifetime; defaults to 900 seconds                         |
+| `STRIPE_SECRET_KEY`                             | No       | Enables Stripe checkout and customer portal                          |
+| `STRIPE_WEBHOOK_SECRET`                         | No       | Verifies Stripe webhook signatures                                   |
+| `STRIPE_PRO_PRICE_ID` / `STRIPE_SCALE_PRICE_ID` | No       | Server-authoritative recurring prices                                |
+| `ANALYTICS_SALT`                                | No       | Salt for the stable visitor hash; falls back to `BETTER_AUTH_SECRET` |
 
 Do not prefix secrets with `VITE_`; Vite-prefixed variables are exposed to browser code.
 
@@ -253,6 +270,13 @@ After publishing the required DNS records, set `EMAIL_FROM` to an address on the
    ```
 
    Subscribe to `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`, and `invoice.payment_failed`.
+
+   If you enable the WeChat Pay / Alipay QR flow, also subscribe to
+   `payment_intent.succeeded`, `payment_intent.payment_failed`, and
+   `payment_intent.canceled`. The `succeeded` event is what grants credits when
+   the customer pays after closing the dialog: the status poll is only a fast
+   path, so without this subscription a scanned payment can be taken and never
+   credited.
 
 ### Before accepting real payments
 

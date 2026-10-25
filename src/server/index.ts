@@ -15,8 +15,11 @@ import {
   RateLimitExceededError,
 } from "./middleware/rate-limit";
 import { agentRoutes } from "./modules/agents/routes";
+import { adminAnalyticsRoutes, analyticsRoutes } from "./modules/analytics/routes";
+import { purgeExpiredAnalytics } from "./modules/analytics/service";
 import { apiKeyRoutes } from "./modules/api-keys/routes";
 import { billingRoutes } from "./modules/billing/routes";
+import { expireStaleDirectQrOrders } from "./modules/billing/direct-qr-service";
 import { reapStaleAgentRuns } from "./modules/billing/service";
 import { chatRoutes } from "./modules/chats/routes";
 import { fileRoutes } from "./modules/files/routes";
@@ -66,11 +69,16 @@ app.on(["GET", "POST"], "/api/auth/*", (context) => {
 app.route("/api/chats", chatRoutes);
 app.route("/api/agents", agentRoutes);
 app.route("/api/billing", billingRoutes);
+// Page views never reach the Worker (assets serve the SPA), so the beacon is the
+// only writer here. Both analytics routers must be registered before
+// `/api` + workspaceRoutes, whose catch-all `requireAuth` would answer 401 first.
+app.route("/api/analytics", analyticsRoutes);
 app.route("/api/files", fileRoutes);
 app.route("/api/api-keys", apiKeyRoutes);
 app.route("/api/v1", externalApiRoutes);
 app.route("/api/notices", noticeRoutes);
 app.route("/api/admin/notices", adminNoticeRoutes);
+app.route("/api/admin/analytics", adminAnalyticsRoutes);
 app.route("/api", workspaceRoutes);
 
 app.all("/agents/*", async (context) => {
@@ -151,5 +159,26 @@ export default {
   },
   async scheduled(_controller, env) {
     await reapStaleAgentRuns({ env });
+    // PaymentIntents do not expire on their own, so abandoned QR codes have to
+    // be swept up here as well. A Stripe outage must not fail the whole run:
+    // the agent reaper above has already done its work and this sweep is
+    // retried on the next tick anyway.
+    try {
+      await expireStaleDirectQrOrders({ env });
+    } catch (error) {
+      logEvent("error", "billing.direct_qr_reaper_failed", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+    // Retention is measured in whole days, so running this every five minutes
+    // deletes nothing on most ticks; the delete is idempotent, and tying it to
+    // the daily boundary would need extra bookkeeping for no benefit.
+    try {
+      await purgeExpiredAnalytics({ env });
+    } catch (error) {
+      logEvent("error", "analytics.purge_failed", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
   },
 } satisfies ExportedHandler<Env>;
