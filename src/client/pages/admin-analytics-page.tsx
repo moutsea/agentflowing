@@ -1,4 +1,14 @@
-import { BarChart3, FileText, Globe2, Link2, Smartphone, Tag } from "lucide-react";
+import {
+  BarChart3,
+  Eye,
+  FileText,
+  Globe2,
+  Link2,
+  RefreshCw,
+  Smartphone,
+  Tag,
+  Users,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -13,8 +23,10 @@ import {
   type AnalyticsPoint,
   type AnalyticsRange,
 } from "../../shared/analytics";
-import { localeFor } from "../i18n";
+import { KpiCard } from "../components/analytics/kpi-card";
+import { ShareBar } from "../components/analytics/share-bar";
 import { apiRequest } from "../lib/api";
+import { calculateGrowth, formatNumber } from "../lib/format";
 import { useWorkspace } from "../workspace";
 
 const DEVICE_LABELS: Record<AnalyticsDevice, string> = {
@@ -29,19 +41,10 @@ function rangeLabel(range: AnalyticsRange) {
   return "Last 90 days";
 }
 
-function formatNumber(value: number, language: string) {
-  return new Intl.NumberFormat(localeFor(language), { maximumFractionDigits: 0 }).format(value);
-}
-
 /** Share of a total, guarding the divide-by-zero case. */
 function percentOf(value: number, total: number) {
   if (total <= 0) return 0;
   return (value / total) * 100;
-}
-
-function formatPercent(value: number) {
-  const clamped = Math.min(100, Math.max(0, value));
-  return `${clamped >= 10 ? clamped.toFixed(0) : clamped.toFixed(1)}%`;
 }
 
 export function AdminAnalyticsPage() {
@@ -116,21 +119,32 @@ function AnalyticsDashboard() {
             {t("Page views reported by visitors' browsers across every page.")}
           </p>
         </div>
-        <div className="analytics-range" role="group" aria-label={t("Date range")}>
-          {ANALYTICS_RANGES.map((range) => (
-            <button
-              key={range}
-              type="button"
-              className={
-                range === days ? "analytics-range-button active" : "analytics-range-button"
-              }
-              aria-pressed={range === days}
-              disabled={loading && range === days}
-              onClick={() => setDays(range)}
-            >
-              {t(rangeLabel(range))}
-            </button>
-          ))}
+        <div className="analytics-toolbar">
+          <button
+            type="button"
+            className="text-button analytics-refresh"
+            disabled={loading}
+            onClick={() => void load()}
+          >
+            <RefreshCw size={14} className={loading ? "spin" : undefined} aria-hidden="true" />
+            {t("Refresh")}
+          </button>
+          <div className="analytics-range" role="group" aria-label={t("Date range")}>
+            {ANALYTICS_RANGES.map((range) => (
+              <button
+                key={range}
+                type="button"
+                className={
+                  range === days ? "analytics-range-button active" : "analytics-range-button"
+                }
+                aria-pressed={range === days}
+                disabled={loading && range === days}
+                onClick={() => setDays(range)}
+              >
+                {t(rangeLabel(range))}
+              </button>
+            ))}
+          </div>
         </div>
       </header>
 
@@ -158,16 +172,20 @@ function AnalyticsDashboard() {
           )}
 
           <section className="analytics-kpi-grid">
-            <article className="panel analytics-kpi">
-              <span className="eyebrow">{t("Page views")}</span>
-              <strong className="analytics-kpi-value">{format(overview.totals.pageViews)}</strong>
-              <Delta current={overview.totals.pageViews} previous={overview.previous.pageViews} />
-            </article>
-            <article className="panel analytics-kpi">
-              <span className="eyebrow">{t("Unique visitors")}</span>
-              <strong className="analytics-kpi-value">{format(overview.totals.visitors)}</strong>
-              <Delta current={overview.totals.visitors} previous={overview.previous.visitors} />
-            </article>
+            <KpiCard
+              title={t("Page views")}
+              value={format(overview.totals.pageViews)}
+              growth={calculateGrowth(overview.totals.pageViews, overview.previous.pageViews)}
+              growthLabel={t("vs previous period")}
+              icon={<Eye size={15} aria-hidden="true" />}
+            />
+            <KpiCard
+              title={t("Unique visitors")}
+              value={format(overview.totals.visitors)}
+              growth={calculateGrowth(overview.totals.visitors, overview.previous.visitors)}
+              growthLabel={t("vs previous period")}
+              icon={<Users size={15} aria-hidden="true" />}
+            />
           </section>
 
           {hasTraffic ? (
@@ -402,45 +420,6 @@ function AnalyticsDashboard() {
         </>
       )}
     </div>
-  );
-}
-
-/** Percentage change against the previous period, or `null` when it had none. */
-function Delta({ current, previous }: { current: number; previous: number }) {
-  const { t } = useTranslation();
-  if (previous <= 0)
-    return (
-      <p className="analytics-delta neutral">
-        <span>—</span> {t("vs previous period")}
-      </p>
-    );
-  const change = ((current - previous) / previous) * 100;
-  const rounded = Math.abs(change) >= 10 ? Math.round(change) : Math.round(change * 10) / 10;
-  let tone = "neutral";
-  if (rounded > 0) tone = "positive";
-  if (rounded < 0) tone = "negative";
-  return (
-    <p className={`analytics-delta ${tone}`}>
-      <span>
-        {rounded > 0 ? "+" : ""}
-        {rounded}%
-      </span>{" "}
-      {t("vs previous period")}
-    </p>
-  );
-}
-
-function ShareBar({ percent }: { percent: number }) {
-  return (
-    <span className="analytics-share">
-      <span className="analytics-share-track">
-        <span
-          className="analytics-share-fill"
-          style={{ width: `${Math.min(100, Math.max(0, percent))}%` }}
-        />
-      </span>
-      <span className="analytics-share-value">{formatPercent(percent)}</span>
-    </span>
   );
 }
 

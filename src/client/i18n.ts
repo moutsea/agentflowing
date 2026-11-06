@@ -505,6 +505,7 @@ const zhCN = {
     "由访客浏览器上报的页面浏览量，覆盖站内所有页面。",
   "Loading traffic analytics…": "正在加载流量数据…",
   "Could not load traffic analytics": "无法加载流量数据",
+  Refresh: "刷新",
   "No data for this period": "本周期暂无数据",
   "No campaigns recorded for this period": "本周期暂无推广活动数据",
   "Collecting data since {{date}}": "数据自 {{date}} 起收集",

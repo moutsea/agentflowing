@@ -3454,6 +3454,31 @@ button {
 .analytics-delta.negative span {
   color: #a24639;
 }
+.analytics-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px 16px;
+}
+.analytics-refresh {
+  color: var(--muted);
+  cursor: pointer;
+}
+.analytics-refresh:hover {
+  color: var(--ink);
+}
+.analytics-refresh:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+.analytics-kpi-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+}
 .analytics-section {
   margin-top: 16px;
 }
@@ -3773,6 +3798,10 @@ button {
     align-items: start;
     flex-direction: column;
     gap: 14px;
+  }
+  .analytics-toolbar {
+    width: 100%;
+    justify-content: flex-start;
   }
   .analytics-range {
     width: 100%;
