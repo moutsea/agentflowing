@@ -12,6 +12,7 @@ import {
 } from "../src/server/modules/analytics/collect";
 import {
   analyticsDay,
+  analyticsDayStart,
   getAnalyticsOverview,
   getAnalyticsTimeZone,
   purgeExpiredAnalytics,
@@ -19,6 +20,8 @@ import {
   shiftDay,
   utcDay,
 } from "../src/server/modules/analytics/service";
+import { getSignupFunnel, SIGNUP_FUNNEL_SQL } from "../src/server/modules/analytics/funnel";
+import { resolveWorkspace } from "../src/server/modules/workspaces/service";
 import {
   ANALYTICS_PATH_MAX_LENGTH,
   type AnalyticsCollectRequest,
@@ -677,6 +680,7 @@ describe("getAnalyticsOverview", () => {
       pages: [],
       countries: [],
       devices: [],
+      funnel: { signups: 0, ranAgent: 0, createdAgent: 0, createdApiKey: 0, paid: 0 },
       historyStartsAt: null,
     });
   });
@@ -785,5 +789,225 @@ describe("day bucketing", () => {
 
   it("ignores a blank variable", () => {
     expect(getAnalyticsTimeZone({ ...env, ANALYTICS_TIME_ZONE: "   " })).toBe("UTC");
+  });
+});
+
+const seconds = (iso: string) => Date.parse(iso) / 1000;
+
+describe("analyticsDayStart", () => {
+  it("is UTC midnight by default and when the zone is invalid", () => {
+    expect(analyticsDayStart(env, "2026-03-10")).toBe(seconds("2026-03-10T00:00:00Z"));
+    const broken = { ...env, ANALYTICS_TIME_ZONE: "Mars/Olympus" };
+    expect(analyticsDayStart(broken, "2026-03-10")).toBe(seconds("2026-03-10T00:00:00Z"));
+  });
+
+  it("finds local midnight in the configured zone", () => {
+    const shanghai = { ...env, ANALYTICS_TIME_ZONE: "Asia/Shanghai" };
+    expect(analyticsDayStart(shanghai, "2026-03-11")).toBe(seconds("2026-03-10T16:00:00Z"));
+  });
+
+  it("follows a daylight saving change", () => {
+    // US clocks spring forward at 02:00 on 2026-03-08: that day starts at
+    // UTC-8, the next one at UTC-7.
+    const losAngeles = { ...env, ANALYTICS_TIME_ZONE: "America/Los_Angeles" };
+    expect(analyticsDayStart(losAngeles, "2026-03-08")).toBe(seconds("2026-03-08T08:00:00Z"));
+    expect(analyticsDayStart(losAngeles, "2026-03-09")).toBe(seconds("2026-03-09T07:00:00Z"));
+  });
+
+  it("agrees with the visit labels at both edges of the day", () => {
+    // Santiago skips local midnight when Chile starts daylight saving; the
+    // other two are the extreme offsets the bisection window has to cover.
+    const zones = ["Asia/Shanghai", "America/Santiago", "Pacific/Kiritimati", "Etc/GMT+12"];
+    for (const zone of zones) {
+      const zoned = { ...env, ANALYTICS_TIME_ZONE: zone };
+      for (const day of ["2026-01-01", "2026-03-08", "2026-09-06", "2026-11-01"]) {
+        const start = analyticsDayStart(zoned, day);
+        expect(analyticsDay(zoned, new Date(start * 1000))).toBe(day);
+        expect(analyticsDay(zoned, new Date((start - 1) * 1000))).toBe(shiftDay(day, -1));
+      }
+    }
+  });
+});
+
+type Account = { id: string; organizationId: string };
+
+describe("getSignupFunnel", () => {
+  /**
+   * D1 state survives between tests in this file and `credit_ledger` refuses
+   * deletes, so accounts cannot be cleaned up afterwards. Each test seeds them
+   * at fixed past instants instead, and reads them back over bounds no other
+   * test writes into.
+   */
+  async function createAccount(createdAt: number): Promise<Account> {
+    const id = `funnel_${crypto.randomUUID().replaceAll("-", "")}`;
+    await env.DB.prepare(
+      `INSERT INTO user (id, name, email, emailVerified, createdAt, updatedAt)
+       VALUES (?, 'Funnel', ?, 1, ?, ?)`,
+    )
+      .bind(id, `${id}@example.com`, createdAt, createdAt)
+      .run();
+    // The production path, so the starter agent is exactly what sign-up seeds.
+    const workspace = await resolveWorkspace({ env, userId: id, userName: "Funnel" });
+    return { id, organizationId: workspace.organization.id };
+  }
+
+  async function starterAgentOf(account: Account): Promise<string> {
+    const id = await env.DB.prepare("SELECT id FROM agent WHERE organization_id = ?")
+      .bind(account.organizationId)
+      .first<string>("id");
+    if (!id) throw new Error("The personal workspace has no starter agent");
+    return id;
+  }
+
+  async function createAgent(account: Account): Promise<string> {
+    const id = crypto.randomUUID();
+    await env.DB.prepare(
+      `INSERT INTO agent (id, organization_id, slug, name, system_prompt, model, created_by)
+       VALUES (?, ?, ?, 'Own agent', 'Be helpful.', 'test-model', ?)`,
+    )
+      .bind(id, account.organizationId, `own-${id}`, account.id)
+      .run();
+    return id;
+  }
+
+  async function runAgent(account: Account, agentId: string, status: string): Promise<void> {
+    await env.DB.prepare(
+      `INSERT INTO agent_run
+       (id, organization_id, agent_id, user_id, idempotency_key, status, credits)
+       VALUES (?, ?, ?, ?, ?, ?, 1)`,
+    )
+      .bind(
+        crypto.randomUUID(),
+        account.organizationId,
+        agentId,
+        account.id,
+        crypto.randomUUID(),
+        status,
+      )
+      .run();
+  }
+
+  async function createRevokedApiKey(account: Account): Promise<void> {
+    await env.DB.prepare(
+      `INSERT INTO api_key (id, organization_id, name, key_hash, key_prefix, created_by, revoked_at)
+       VALUES (?, ?, 'CI', ?, 'af_test', ?, unixepoch())`,
+    )
+      .bind(crypto.randomUUID(), account.organizationId, crypto.randomUUID(), account.id)
+      .run();
+  }
+
+  async function createOrder(organizationId: string, status: "paid" | "failed"): Promise<void> {
+    await env.DB.prepare(
+      `INSERT INTO "order"
+       (id, organization_id, provider, kind, plan_id, amount, currency, credits, status, paid_at)
+       VALUES (?, ?, 'stripe', 'credit_pack', 'starter', 900, 'usd', 100, ?, ?)`,
+    )
+      .bind(
+        crypto.randomUUID(),
+        organizationId,
+        status,
+        status === "paid" ? Math.floor(Date.now() / 1000) : null,
+      )
+      .run();
+  }
+
+  it("follows the accounts created in the range", async () => {
+    const start = seconds("2025-01-06T00:00:00Z");
+    const end = seconds("2025-01-13T00:00:00Z");
+
+    // Only the starter agent: signed up, nothing else.
+    await createAccount(start);
+    // Just outside on both sides; the end bound is exclusive.
+    await createAccount(start - 1);
+    await createAccount(end);
+
+    // A failed run is still an attempt to use the product.
+    const tried = await createAccount(start + 3600);
+    await runAgent(tried, await starterAgentOf(tried), "failed");
+
+    const builder = await createAccount(start + 86_400);
+    await runAgent(builder, await createAgent(builder), "completed");
+    await createRevokedApiKey(builder);
+
+    // Two orders, one paid: one paying account.
+    const payer = await createAccount(start + 2 * 86_400);
+    await createOrder(payer.organizationId, "failed");
+    await createOrder(payer.organizationId, "paid");
+    // A plain member of the paying workspace did not pay.
+    const teammate = await createAccount(start + 3 * 86_400);
+    await env.DB.prepare(
+      `INSERT INTO member (id, organizationId, userId, role, createdAt)
+       VALUES (?, ?, ?, 'member', unixepoch())`,
+    )
+      .bind(crypto.randomUUID(), payer.organizationId, teammate.id)
+      .run();
+
+    expect(await getSignupFunnel(env, { start, end })).toEqual({
+      signups: 5,
+      ranAgent: 2,
+      createdAgent: 1,
+      createdApiKey: 1,
+      paid: 1,
+    });
+  });
+
+  it("keeps what an account did in a workspace it has since left", async () => {
+    const start = seconds("2025-02-03T00:00:00Z");
+    const end = seconds("2025-02-10T00:00:00Z");
+
+    // The team's owner signed up long before, outside every range read here.
+    const team = await createAccount(seconds("2024-12-01T00:00:00Z"));
+    const leaver = await createAccount(start + 3600);
+    const membershipId = crypto.randomUUID();
+    await env.DB.prepare(
+      `INSERT INTO member (id, organizationId, userId, role, createdAt)
+       VALUES (?, ?, ?, 'member', unixepoch())`,
+    )
+      .bind(membershipId, team.organizationId, leaver.id)
+      .run();
+
+    // Everything happens in the team workspace, not the leaver's own one.
+    const inTeam: Account = { id: leaver.id, organizationId: team.organizationId };
+    await runAgent(inTeam, await createAgent(inTeam), "completed");
+    await createRevokedApiKey(inTeam);
+
+    // better-auth's leave / remove-member deletes exactly this row.
+    await env.DB.prepare("DELETE FROM member WHERE id = ?").bind(membershipId).run();
+
+    expect(await getSignupFunnel(env, { start, end })).toEqual({
+      signups: 1,
+      ranAgent: 1,
+      createdAgent: 1,
+      createdApiKey: 1,
+      paid: 0,
+    });
+  });
+
+  it("reads every table through an index", async () => {
+    const { results } = await env.DB.prepare(`EXPLAIN QUERY PLAN ${SIGNUP_FUNNEL_SQL}`)
+      .bind(0, 1)
+      .all<{ detail: string }>();
+    const steps = results.map((row) => row.detail);
+    // A scan per account in the range is what the 0008 indexes exist to avoid.
+    expect(steps.filter((detail) => /^SCAN\b/.test(detail))).toEqual([]);
+    expect(steps).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("user_createdAt_idx"),
+        expect.stringContaining("agent_run_user_idx"),
+        expect.stringContaining("agent_created_by_idx"),
+        expect.stringContaining("api_key_created_by_idx"),
+      ]),
+    );
+  });
+
+  it("is all zeros for a range nobody signed up in", async () => {
+    const start = seconds("2024-06-01T00:00:00Z");
+    expect(await getSignupFunnel(env, { start, end: start + 7 * 86_400 })).toEqual({
+      signups: 0,
+      ranAgent: 0,
+      createdAgent: 0,
+      createdApiKey: 0,
+      paid: 0,
+    });
   });
 });

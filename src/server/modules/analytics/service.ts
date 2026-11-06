@@ -37,6 +37,7 @@ import {
   isIgnoredPath,
   normalizeAnalyticsPath,
 } from "./collect";
+import { getSignupFunnel } from "./funnel";
 
 /* -------------------------------------------------------------------------- */
 /* Day arithmetic                                                             */
@@ -123,6 +124,34 @@ export function analyticsDay(env: object, date: Date): string {
   const value = (type: "year" | "month" | "day") =>
     parts.find((part) => part.type === type)?.value ?? "";
   return `${value("year")}-${value("month")}-${value("day")}`;
+}
+
+/**
+ * The first second, in unix seconds, that `analyticsDay` labels `day`.
+ *
+ * Visits carry a day label, but other tables store instants, so reading them
+ * over the same range needs the instant each label starts at. It is found by
+ * bisecting `analyticsDay` itself rather than by computing a zone offset: the
+ * bounds then agree with how visits are bucketed by construction, including on
+ * days a daylight-saving change skips or repeats local midnight.
+ *
+ * Every real zone is within UTC-12..UTC+14, so the boundary lies between
+ * 15 hours before and 13 hours after UTC midnight of the same label.
+ */
+export function analyticsDayStart(env: object, day: string): number {
+  const utcMidnight = Date.parse(`${day}T00:00:00.000Z`) / 1000;
+  if (getAnalyticsTimeZone(env) === DEFAULT_TIME_ZONE) return utcMidnight;
+
+  const labelAt = (seconds: number) => analyticsDay(env, new Date(seconds * 1000));
+  // Invariant: `low` is labelled before `day`, `high` is labelled `day` or later.
+  let low = utcMidnight - 15 * 3600;
+  let high = utcMidnight + 13 * 3600;
+  while (high - low > 1) {
+    const middle = Math.floor((low + high) / 2);
+    if (labelAt(middle) < day) low = middle;
+    else high = middle;
+  }
+  return high;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -296,7 +325,7 @@ export async function getAnalyticsOverview(
         .all<CampaignRow>(),
     ]);
 
-  const [pageResult, countryResult, deviceResult, historyRow] = await Promise.all([
+  const [pageResult, countryResult, deviceResult, historyRow, funnel] = await Promise.all([
     env.DB.prepare(
       `SELECT path, COUNT(*) AS pageViews, COUNT(DISTINCT visitor_key) AS visitors
        FROM analytics_visit ${WINDOW} GROUP BY path ORDER BY pageViews DESC, path ASC LIMIT 10`,
@@ -319,6 +348,12 @@ export async function getAnalyticsOverview(
     env.DB.prepare("SELECT MIN(day) AS since FROM analytics_visit").first<{
       since: string | null;
     }>(),
+    // Same calendar as the visit labels, so "the last 7 days" means the same
+    // seven days for page views and for sign-ups.
+    getSignupFunnel(env, {
+      start: analyticsDayStart(env, since),
+      end: analyticsDayStart(env, shiftDay(until, 1)),
+    }),
   ]);
 
   // Days with no traffic simply do not come back from SQLite. The chart needs a
@@ -380,6 +415,7 @@ export async function getAnalyticsOverview(
     pages,
     countries,
     devices,
+    funnel,
     historyStartsAt: historyRow?.since ?? null,
   };
 }

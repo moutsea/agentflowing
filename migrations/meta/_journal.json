@@ -57,6 +57,13 @@
       "when": 1792924983649,
       "tag": "0007_direct_qr_reconciliation",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1793968978984,
+      "tag": "0008_analytics_funnel_indexes",
+      "breakpoints": true
     }
   ]
 }

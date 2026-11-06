@@ -2,7 +2,7 @@ import { applyD1Migrations, createExecutionContext, env, SELF } from "cloudflare
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { app } from "../src/server";
-import { shiftDay, utcDay } from "../src/server/modules/analytics/service";
+import { analyticsDayStart, shiftDay, utcDay } from "../src/server/modules/analytics/service";
 import { DEFAULT_ANALYTICS_RANGE, type AnalyticsOverview } from "../src/shared/analytics";
 
 const migrationFiles = import.meta.glob("../migrations/*.sql", {
@@ -287,6 +287,24 @@ describe("admin analytics dashboard", () => {
       { path: "/", pageViews: 1, visitors: 1 },
       { path: "/pricing", pageViews: 1, visitors: 1 },
     ]);
+    // The admin just signed up through better-auth, so they must be inside the
+    // range: this pins the unit of `user.createdAt` (seconds) against what
+    // better-auth really writes. If it wrote milliseconds, they would land far
+    // past the end bound. The expected count is read over the same bounds
+    // rather than the whole table, so seeding older accounts here stays valid.
+    const start = analyticsDayStart(env, body.data.range.since);
+    const end = analyticsDayStart(env, shiftDay(body.data.range.until, 1));
+    const createdAt = await env.DB.prepare("SELECT createdAt FROM user WHERE id = ?")
+      .bind(admin.userId)
+      .first<number>("createdAt");
+    expect(createdAt).toBeGreaterThanOrEqual(start);
+    expect(createdAt).toBeLessThan(end);
+    const inRange = await env.DB.prepare(
+      "SELECT COUNT(*) AS total FROM user WHERE createdAt >= ? AND createdAt < ?",
+    )
+      .bind(start, end)
+      .first<number>("total");
+    expect(body.data.funnel.signups).toBe(inRange);
   });
 
   it("only accepts the offered ranges", async () => {

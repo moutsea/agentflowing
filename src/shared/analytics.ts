@@ -153,6 +153,40 @@ export type AnalyticsDeviceRow = {
   pageViews: number;
 };
 
+/**
+ * What the accounts that signed up inside the range went on to do.
+ *
+ * Every later step is a subset of `signups` (the same cohort, "has done this by
+ * now"), so each one can be read as a share of it. Visitors are deliberately
+ * not part of the funnel: they are browser hashes and include people who
+ * already have an account, so dividing sign-ups by them would not be a rate.
+ */
+export type AnalyticsFunnel = {
+  signups: number;
+  ranAgent: number;
+  createdAgent: number;
+  createdApiKey: number;
+  paid: number;
+};
+
+export type AnalyticsFunnelStep = Exclude<keyof AnalyticsFunnel, "signups">;
+
+/** Display order of the steps after sign-up. */
+export const ANALYTICS_FUNNEL_STEPS: readonly AnalyticsFunnelStep[] = [
+  "ranAgent",
+  "createdAgent",
+  "createdApiKey",
+  "paid",
+];
+
+/** English display names, doubled as i18n keys on the client. */
+export const ANALYTICS_FUNNEL_LABELS: Record<AnalyticsFunnelStep, string> = {
+  ranAgent: "Ran an agent",
+  createdAgent: "Built their own agent",
+  createdApiKey: "Created an API key",
+  paid: "Made a payment",
+};
+
 export type AnalyticsOverview = {
   range: {
     days: AnalyticsRange;
@@ -173,6 +207,8 @@ export type AnalyticsOverview = {
   pages: AnalyticsPageRow[];
   countries: AnalyticsCountryRow[];
   devices: AnalyticsDeviceRow[];
+  /** Accounts created in the range and how far they got. */
+  funnel: AnalyticsFunnel;
   /** Oldest day still stored, so the dashboard can say what history it has. */
   historyStartsAt: string | null;
 };

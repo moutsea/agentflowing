@@ -511,6 +511,16 @@ const zhCN = {
   "Collecting data since {{date}}": "数据自 {{date}} 起收集",
   "{{visitors}} unique visitors": "{{visitors}} 独立访客",
   "{{visitors}} unique visitor": "{{visitors}} 独立访客",
+  Conversion: "转化",
+  "Sign-up funnel": "注册转化漏斗",
+  "No sign-ups in this period": "本周期暂无新注册",
+  "Signed up": "注册",
+  "Ran an agent": "运行过 Agent",
+  "Built their own agent": "创建了自己的 Agent",
+  "Created an API key": "创建了 API 密钥",
+  "Made a payment": "完成付费",
+  "Accounts created in this period and what they have done since.":
+    "统计本周期内注册的账号，以及这些账号注册后至今完成了哪些操作。",
 } satisfies Record<string, string>;
 
 function normalizeLanguage(language?: string | null) {

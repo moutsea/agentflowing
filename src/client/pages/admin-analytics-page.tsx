@@ -23,6 +23,7 @@ import {
   type AnalyticsPoint,
   type AnalyticsRange,
 } from "../../shared/analytics";
+import { FunnelPanel } from "../components/analytics/funnel-panel";
 import { KpiCard } from "../components/analytics/kpi-card";
 import { ShareBar } from "../components/analytics/share-bar";
 import { apiRequest } from "../lib/api";
@@ -417,6 +418,11 @@ function AnalyticsDashboard() {
               <p>{t("Views are collected from the moment this feature is deployed.")}</p>
             </article>
           )}
+
+          {/* Read from account tables, so it has data even when no visit was tracked. */}
+          <section className="analytics-section">
+            <FunnelPanel funnel={overview.funnel} />
+          </section>
         </>
       )}
     </div>

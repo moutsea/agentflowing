@@ -13,14 +13,19 @@ const timestamps = {
     .notNull(),
 };
 
-export const user = sqliteTable("user", {
-  id: text("id").primaryKey(),
-  name: text("name").notNull(),
-  email: text("email").notNull().unique(),
-  emailVerified: integer("emailVerified", { mode: "boolean" }).notNull(),
-  image: text("image"),
-  ...timestamps,
-});
+export const user = sqliteTable(
+  "user",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    email: text("email").notNull().unique(),
+    emailVerified: integer("emailVerified", { mode: "boolean" }).notNull(),
+    image: text("image"),
+    ...timestamps,
+  },
+  // The sign-up funnel reads accounts by creation time.
+  (table) => [index("user_createdAt_idx").on(table.createdAt)],
+);
 
 export const session = sqliteTable(
   "session",
@@ -159,6 +164,7 @@ export const agent = sqliteTable(
   (table) => [
     uniqueIndex("agent_org_slug_uidx").on(table.organizationId, table.slug),
     index("agent_org_status_idx").on(table.organizationId, table.status),
+    index("agent_created_by_idx").on(table.createdBy),
   ],
 );
 
@@ -337,6 +343,7 @@ export const apiKey = sqliteTable(
   (table) => [
     uniqueIndex("api_key_hash_uidx").on(table.keyHash),
     index("api_key_org_idx").on(table.organizationId),
+    index("api_key_created_by_idx").on(table.createdBy),
   ],
 );
 
@@ -400,6 +407,7 @@ export const agentRun = sqliteTable(
     uniqueIndex("agent_run_org_idempotency_uidx").on(table.organizationId, table.idempotencyKey),
     index("agent_run_org_started_idx").on(table.organizationId, table.startedAt),
     index("agent_run_status_started_idx").on(table.status, table.startedAt),
+    index("agent_run_user_idx").on(table.userId),
   ],
 );
 
