@@ -1,5 +1,5 @@
 import { relations, sql } from "drizzle-orm";
-import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { check, index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 import { ANALYTICS_DEVICES, ANALYTICS_SOURCES } from "../../shared/analytics";
 
@@ -262,6 +262,117 @@ export const subscription = sqliteTable(
   ],
 );
 
+export const coupon = sqliteTable(
+  "coupon",
+  {
+    id: text("id").primaryKey(),
+    code: text("code").notNull(),
+    discountRateBps: integer("discount_rate_bps").notNull(),
+    status: text("status", {
+      enum: ["active", "reserved", "used", "expired", "revoked"],
+    })
+      .notNull()
+      .default("active"),
+    expiresAt: integer("expires_at", { mode: "timestamp" }).notNull(),
+    reservationId: text("reservation_id"),
+    reservedByUserId: text("reserved_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    reservedOrganizationId: text("reserved_organization_id").references(
+      () => organization.id,
+      { onDelete: "set null" },
+    ),
+    reservedAt: integer("reserved_at", { mode: "timestamp" }),
+    reservationExpiresAt: integer("reservation_expires_at", { mode: "timestamp" }),
+    redeemedByUserId: text("redeemed_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    redeemedOrganizationId: text("redeemed_organization_id").references(
+      () => organization.id,
+      { onDelete: "set null" },
+    ),
+    redeemedAt: integer("redeemed_at", { mode: "timestamp" }),
+    revokedAt: integer("revoked_at", { mode: "timestamp" }),
+    note: text("note"),
+    source: text("source").notNull().default("admin"),
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("coupon_code_uidx").on(table.code),
+    uniqueIndex("coupon_reservation_id_uidx").on(table.reservationId),
+    index("coupon_status_expires_idx").on(table.status, table.expiresAt),
+    index("coupon_reservation_expires_idx").on(table.reservationExpiresAt),
+    check(
+      "coupon_discount_rate_bps_check",
+      sql`typeof(${table.discountRateBps}) = 'integer' AND ${table.discountRateBps} BETWEEN 1 AND 5000`,
+    ),
+    check(
+      "coupon_expires_at_check",
+      sql`${table.expiresAt} > ${table.createdAt}`,
+    ),
+    check(
+      "coupon_reservation_window_check",
+      sql`${table.reservationExpiresAt} IS NULL OR (${table.reservedAt} IS NOT NULL AND ${table.reservationExpiresAt} > ${table.reservedAt})`,
+    ),
+    check(
+      "coupon_redeemed_at_check",
+      sql`${table.redeemedAt} IS NULL OR ${table.redeemedAt} >= ${table.createdAt}`,
+    ),
+  ],
+);
+
+export const redemptionCode = sqliteTable(
+  "redemption_code",
+  {
+    id: text("id").primaryKey(),
+    code: text("code").notNull(),
+    credits: integer("credits").notNull(),
+    expiresAt: integer("expires_at", { mode: "timestamp" }).notNull(),
+    redeemedByUserId: text("redeemed_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    redeemedOrganizationId: text("redeemed_organization_id").references(
+      () => organization.id,
+      { onDelete: "set null" },
+    ),
+    redeemedAt: integer("redeemed_at", { mode: "timestamp" }),
+    revokedAt: integer("revoked_at", { mode: "timestamp" }),
+    note: text("note"),
+    source: text("source").notNull().default("admin"),
+    idempotencyKey: text("idempotency_key").notNull(),
+    requestFingerprint: text("request_fingerprint").notNull(),
+    batchIndex: integer("batch_index").notNull(),
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("redemption_code_code_uidx").on(table.code),
+    uniqueIndex("redemption_code_idempotency_batch_uidx").on(
+      table.idempotencyKey,
+      table.batchIndex,
+    ),
+    index("redemption_code_created_at_idx").on(table.createdAt),
+    index("redemption_code_expires_at_idx").on(table.expiresAt),
+    check(
+      "redemption_code_credits_check",
+      sql`typeof(${table.credits}) = 'integer' AND ${table.credits} BETWEEN 1 AND 9007199254740991`,
+    ),
+    check(
+      "redemption_code_batch_index_check",
+      sql`typeof(${table.batchIndex}) = 'integer' AND ${table.batchIndex} >= 0`,
+    ),
+    check(
+      "redemption_code_expires_at_check",
+      sql`${table.expiresAt} > ${table.createdAt}`,
+    ),
+    check(
+      "redemption_code_redeemed_at_check",
+      sql`${table.redeemedAt} IS NULL OR ${table.redeemedAt} >= ${table.createdAt}`,
+    ),
+  ],
+);
+
 export const order = sqliteTable(
   "order",
   {
@@ -276,6 +387,12 @@ export const order = sqliteTable(
     amount: integer("amount").notNull(),
     currency: text("currency").notNull(),
     credits: integer("credits").notNull().default(0),
+    couponId: text("coupon_id").references(() => coupon.id, { onDelete: "set null" }),
+    couponCode: text("coupon_code"),
+    baseAmount: integer("base_amount"),
+    discountAmount: integer("discount_amount"),
+    discountRateBps: integer("discount_rate_bps"),
+    couponReservationId: text("coupon_reservation_id"),
     status: text("status", {
       enum: ["created", "processing", "paid", "failed", "refunded"],
     })
@@ -524,6 +641,7 @@ export const schema = {
   analyticsVisit,
   apiKey,
   chat,
+  coupon,
   creditAccount,
   creditLedger,
   fileAsset,
@@ -533,6 +651,7 @@ export const schema = {
   noticeReadStatus,
   organization,
   paymentEvent,
+  redemptionCode,
   order,
   session,
   subscription,
@@ -548,6 +667,8 @@ export type User = typeof user.$inferSelect;
 export type Organization = typeof organization.$inferSelect;
 export type Agent = typeof agent.$inferSelect;
 export type Chat = typeof chat.$inferSelect;
+export type Coupon = typeof coupon.$inferSelect;
 export type CreditLedgerEntry = typeof creditLedger.$inferSelect;
 export type FileAsset = typeof fileAsset.$inferSelect;
+export type RedemptionCode = typeof redemptionCode.$inferSelect;
 export type Subscription = typeof subscription.$inferSelect;
