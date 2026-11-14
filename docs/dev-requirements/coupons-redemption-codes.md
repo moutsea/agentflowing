@@ -258,4 +258,4 @@ T8 需要把以上契约、鉴权示例、字段表、状态、错误码、幂�
 
 当前 `src/server/modules/billing/stripe.ts` 的 `createStripeCheckout` 是 `mode: "subscription"` 的订阅结账，并且设置了 `allow_promotion_codes: true`；当前一次性 `order.kind = "credit_pack"` 由 `/api/billing/qr` 创建 Stripe `PaymentIntent`。因此“在 Stripe 充值结账应用优惠券”与“改动现有订阅、使用 Stripe 原生 coupon”不能直接对应同一个现有入口。
 
-本文按“不改现有订阅、不使用 Stripe 原生 coupon”的决策，将优惠券目标限定为 `credit_pack` 充值订单，并要求 T4 接入现有直充 PaymentIntent（若产品还要求新增卡片式 credit pack Checkout，需要在 T4 开始前另行确认入口和金额模型）。同时开发时应审查并关闭现有 `allow_promotion_codes` 对本需求路径的影响，避免非本需求的 Stripe 原生 promotion code 与内部优惠券混用。
+本文按“不改现有订阅、不使用 Stripe 原生 coupon”的决策，将优惠券目标限定为 `credit_pack` 充值订单，并要求 T4 接入现有直充 PaymentIntent。2026-11-14 用户已拍板：优惠券只接直充二维码，不新增卡片式 credit pack Checkout。同时开发时应审查并关闭现有 `allow_promotion_codes` 对本需求路径的影响，避免非本需求的 Stripe 原生 promotion code 与内部优惠券混用。
