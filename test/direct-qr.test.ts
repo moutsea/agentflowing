@@ -598,8 +598,8 @@ describe("DirectQrError", () => {
 });
 
 /**
- * Seed an order the sweep can pick up. A row without an intent id is released
- * without touching Stripe; a row with one drives the cancel/retrieve branches.
+ * Seed an order the sweep can pick up. A row without an intent id is resolved
+ * through Stripe search; a row with one drives the cancel/retrieve branches.
  */
 async function seedSweepOrder(options: {
   kind?: "credit_pack" | "subscription";
@@ -626,6 +626,55 @@ async function seedSweepOrder(options: {
     )
     .run();
   return { orderId, organizationId };
+}
+
+async function seedReservedCouponSweepOrder() {
+  const { userId, organizationId } = await seedWorkspace();
+  const orderId = `order_${crypto.randomUUID()}`;
+  const couponId = `coupon_${crypto.randomUUID()}`;
+  const now = Math.floor(Date.now() / 1000);
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO coupon
+       (id, code, discount_rate_bps, status, expires_at, reservation_id,
+        reserved_by_user_id, reserved_organization_id, reserved_at,
+        reservation_expires_at, createdAt, updatedAt)
+       VALUES (?, ?, 1000, 'reserved', ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(
+      couponId,
+      `TEST-${crypto.randomUUID()}`,
+      now + 86_400,
+      orderId,
+      userId,
+      organizationId,
+      now,
+      now + 3_600,
+      now,
+      now,
+    ),
+    env.DB.prepare(
+      `INSERT INTO "order"
+       (id, organization_id, provider, kind, plan_id, amount, currency, credits,
+        coupon_id, coupon_code, coupon_reservation_id, status, createdAt, updatedAt)
+       VALUES (?, ?, 'stripe', 'credit_pack', 'pro', 2610, 'usd', 5000,
+               ?, ?, ?, 'processing', ?, ?)`,
+    ).bind(
+      orderId,
+      organizationId,
+      couponId,
+      `TEST-${couponId}`,
+      orderId,
+      now - 7_200,
+      now - 7_200,
+    ),
+  ]);
+  return { couponId, orderId };
+}
+
+async function couponStatus(couponId: string) {
+  return env.DB.prepare(`SELECT status, reservation_id AS reservationId FROM coupon WHERE id = ?`)
+    .bind(couponId)
+    .first<{ status: string; reservationId: string | null }>();
 }
 
 async function orderStatus(orderId: string) {
@@ -798,9 +847,43 @@ describe("expireStaleDirectQrOrders", () => {
   it("fails an abandoned order that never received an intent", async () => {
     const { orderId } = await seedSweepOrder({ ageSeconds: 7_200 });
     await expect(
-      expireStaleDirectQrOrders({ env: configuredEnv(), staleAfterSeconds: 3_600 }),
+      expireStaleDirectQrOrders({
+        env: configuredEnv(),
+        staleAfterSeconds: 3_600,
+        stripe: {
+          paymentIntents: {
+            cancel: async () => ({ status: "canceled" }),
+            retrieve: async () => ({}) as Stripe.PaymentIntent,
+            search: async () => ({ data: [] }),
+          },
+        },
+      }),
     ).resolves.toEqual({ canceled: 0, recovered: 0, failed: 1 });
     await expect(orderStatus(orderId)).resolves.toBe("failed");
+  });
+
+  it("keeps a reserved coupon when Stripe search is unavailable", async () => {
+    const { couponId, orderId } = await seedReservedCouponSweepOrder();
+    await expect(
+      expireStaleDirectQrOrders({
+        env: configuredEnv(),
+        staleAfterSeconds: 3_600,
+        stripe: {
+          paymentIntents: {
+            cancel: async () => ({ status: "canceled" }),
+            retrieve: async () => ({}) as Stripe.PaymentIntent,
+            search: async () => {
+              throw new Error("Stripe search unavailable");
+            },
+          },
+        },
+      }),
+    ).resolves.toEqual({ canceled: 0, recovered: 0, failed: 0 });
+    await expect(orderStatus(orderId)).resolves.toBe("processing");
+    await expect(couponStatus(couponId)).resolves.toEqual({
+      status: "reserved",
+      reservationId: orderId,
+    });
   });
 
   it("leaves recent, paid and subscription orders alone", async () => {
