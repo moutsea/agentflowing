@@ -8,7 +8,11 @@ import { grantCredits } from "./credit-grant";
 // Circular with this module: `direct-qr-service` builds its intents with the
 // client factory below. Only request handlers touch either binding, so the
 // cycle resolves before anything is called.
-import { DirectQrUnfulfillableError, fulfillDirectQrIntent } from "./direct-qr-service";
+import {
+  DirectQrUnfulfillableError,
+  failDirectQrIntent,
+  fulfillDirectQrIntent,
+} from "./direct-qr-service";
 
 type StoredOrder = {
   id: string;
@@ -265,13 +269,7 @@ async function dispatchStripeEvent(env: Env, event: Stripe.Event) {
         await markEventCompleted(env, event.id);
         return;
       }
-      await env.DB.batch([
-        env.DB.prepare(
-          `UPDATE "order" SET status = 'failed', updatedAt = unixepoch()
-           WHERE provider_session_id = ? AND status <> 'paid'`,
-        ).bind(event.data.object.id),
-        completedEventStatement(env, event.id),
-      ]);
+      await failDirectQrIntent(env, event.data.object.id, event.id);
       return;
     default:
       await markEventCompleted(env, event.id);

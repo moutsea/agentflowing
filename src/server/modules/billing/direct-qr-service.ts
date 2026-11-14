@@ -11,6 +11,12 @@ import {
 import { readRuntimeString } from "../../env";
 import { isPlatformAdmin } from "../../middleware/platform-admin";
 import { logEvent } from "../../observability";
+import {
+  getCouponByCode,
+  getCouponState,
+  isCouponCodeFormat,
+  normalizeCouponCode,
+} from "../coupons/service";
 import { getBillingCurrency, getDirectQrStaleSeconds, getPaidPlan, getPlan } from "./catalog";
 import {
   isCancelableDirectQrStatus,
@@ -54,6 +60,10 @@ export class DirectQrError extends Error {
       | "invalid_plan"
       | "unsupported_method"
       | "no_presentation"
+      | "invalid_coupon"
+      | "coupon_not_found"
+      | "coupon_reserved"
+      | "coupon_unavailable"
       /** The wallet settled the intent before we could show a code. */
       | "already_paid"
       | "not_found",
@@ -71,6 +81,12 @@ type StoredOrder = {
   plan_id: string;
   kind: string;
   credits: number;
+  coupon_id: string | null;
+  coupon_code: string | null;
+  coupon_reservation_id: string | null;
+  base_amount: number | null;
+  discount_amount: number | null;
+  discount_rate_bps: number | null;
 };
 
 const PAYMENT_INTENT_ID = /^pi_[A-Za-z0-9]+$/;
@@ -108,6 +124,166 @@ const ZERO_DECIMAL_CURRENCIES = new Set(["jpy", "krw"]);
 
 function toMinorUnits(amount: number, currency: string) {
   return ZERO_DECIMAL_CURRENCIES.has(currency) ? Math.round(amount) : Math.round(amount * 100);
+}
+
+function fromMinorUnits(amount: number, currency: string) {
+  return ZERO_DECIMAL_CURRENCIES.has(currency) ? amount : amount / 100;
+}
+
+/** Compute a percentage discount entirely in integer Stripe minor units. */
+export function selectMaximumDiscountRateBps(candidates: readonly number[]) {
+  let maximum = 0;
+  for (const candidate of candidates) {
+    if (!Number.isSafeInteger(candidate) || candidate < 0 || candidate > 5000) {
+      throw new Error("Discount rate must be an integer from 0 to 5000 basis points");
+    }
+    maximum = Math.max(maximum, candidate);
+  }
+  return maximum;
+}
+
+export function calculateDiscountedMinorAmount(baseMinor: number, discountRateBps: number) {
+  if (!Number.isSafeInteger(baseMinor) || baseMinor < 0) {
+    throw new Error("Base amount must be a non-negative safe integer");
+  }
+  selectMaximumDiscountRateBps([discountRateBps]);
+  if (baseMinor === 0) return 0;
+  const discounted = (BigInt(baseMinor) * BigInt(10_000 - discountRateBps)) / BigInt(10_000);
+  return Math.max(1, Number(discounted));
+}
+
+const COUPON_RESERVATION_SECONDS = 60 * 60;
+
+type CouponReservation = {
+  id: string;
+  code: string;
+  discountRateBps: number;
+  reservationId: string;
+  discountAmount: number;
+  amount: number;
+};
+
+function couponCheckoutError(
+  code: "invalid_coupon" | "coupon_not_found" | "coupon_reserved" | "coupon_unavailable",
+  message: string,
+  status: 400 | 404 | 409,
+) {
+  return new DirectQrError(code, message, status);
+}
+
+async function loadCouponReservation(params: {
+  env: Env;
+  couponCode: unknown;
+  userId: string;
+  organizationId: string;
+  orderId: string;
+  planId: string;
+  currency: string;
+  credits: number;
+  baseAmount: number;
+  now?: number;
+}): Promise<CouponReservation | null> {
+  if (params.couponCode === undefined) return null;
+  const code = normalizeCouponCode(params.couponCode);
+  if (!isCouponCodeFormat(code)) {
+    throw couponCheckoutError("invalid_coupon", "Coupon code has an invalid format", 400);
+  }
+  const row = await getCouponByCode(params.env, code);
+  if (!row) throw couponCheckoutError("coupon_not_found", "Coupon was not found", 404);
+  const now = params.now ?? Math.floor(Date.now() / 1000);
+  const state = getCouponState(row, now);
+  if (state.status === "expired") {
+    throw couponCheckoutError("coupon_unavailable", "Coupon has expired", 409);
+  }
+  if (state.status === "revoked") {
+    throw couponCheckoutError("coupon_unavailable", "Coupon has been revoked", 409);
+  }
+  if (state.usageState === "redeemed") {
+    throw couponCheckoutError("coupon_unavailable", "Coupon has already been used", 409);
+  }
+  if (!state.isAvailable) {
+    throw couponCheckoutError("coupon_reserved", "Coupon is reserved for another payment", 409);
+  }
+
+  // The direct-QR path currently has one internal coupon candidate. Keeping
+  // selection explicit prevents a future automatic discount from stacking.
+  const discountRateBps = selectMaximumDiscountRateBps([row.discountRateBps]);
+  const amount = calculateDiscountedMinorAmount(params.baseAmount, discountRateBps);
+  const discountAmount = params.baseAmount - amount;
+  const reservationExpiresAt = now + COUPON_RESERVATION_SECONDS;
+  const reservationId = params.orderId;
+
+  // The conditional update is the concurrency boundary. The guard turns a
+  // losing update into a transaction failure, so the order row cannot be
+  // committed without the matching reservation.
+  try {
+    await params.env.DB.batch([
+      params.env.DB.prepare(
+        `UPDATE coupon
+         SET status = 'reserved', reservation_id = ?, reserved_by_user_id = ?,
+             reserved_organization_id = ?, reserved_at = ?, reservation_expires_at = ?,
+             updatedAt = ?
+         WHERE id = ? AND revoked_at IS NULL AND redeemed_at IS NULL
+           AND status = 'active' AND expires_at > ? AND reservation_id IS NULL`,
+      ).bind(
+        reservationId,
+        params.userId,
+        params.organizationId,
+        now,
+        reservationExpiresAt,
+        now,
+        row.id,
+        now,
+      ),
+      params.env.DB.prepare(
+        `UPDATE coupon
+         SET updatedAt = CASE WHEN changes() > 0 THEN updatedAt ELSE NULL END
+         WHERE id = ?`,
+      ).bind(row.id),
+      params.env.DB.prepare(
+        `INSERT INTO "order"
+         (id, organization_id, provider, kind, plan_id, amount, currency, credits,
+          coupon_id, coupon_code, base_amount, discount_amount, discount_rate_bps,
+          coupon_reservation_id, status, createdAt, updatedAt)
+         VALUES (?, ?, 'stripe', 'credit_pack', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                 'created', unixepoch(), unixepoch())`,
+      ).bind(
+        params.orderId,
+        params.organizationId,
+        params.planId,
+        amount,
+        params.currency,
+        params.credits,
+        row.id,
+        code,
+        params.baseAmount,
+        discountAmount,
+        discountRateBps,
+        reservationId,
+      ),
+    ]);
+  } catch (error) {
+    const latest = await getCouponByCode(params.env, code);
+    if (latest) {
+      const latestState = getCouponState(latest, now);
+      if (latestState.usageState === "reserved") {
+        throw couponCheckoutError("coupon_reserved", "Coupon is reserved for another payment", 409);
+      }
+      if (latestState.status !== "active") {
+        throw couponCheckoutError("coupon_unavailable", "Coupon is no longer available", 409);
+      }
+    }
+    throw error;
+  }
+
+  return {
+    id: row.id,
+    code,
+    discountRateBps,
+    reservationId,
+    discountAmount,
+    amount,
+  };
 }
 
 type DirectQrMode = "off" | "admins" | "all";
@@ -178,13 +354,129 @@ async function findStripeCustomerId(env: Env, organizationId: string) {
 /** Cancel best effort: the intent is already unusable, so a failure only logs. */
 async function cancelQuietly(stripe: Stripe, paymentIntentId: string) {
   try {
-    await stripe.paymentIntents.cancel(paymentIntentId);
+    return await stripe.paymentIntents.cancel(paymentIntentId);
   } catch (error) {
     logEvent("error", "billing.direct_qr_cancel_failed", {
       paymentIntentId,
       message: errorMessage(error),
     });
+    return null;
   }
+}
+
+/** Release a coupon only after the order has conditionally become unpaid. */
+export async function failDirectQrOrder(
+  env: Env,
+  orderId: string,
+  eventId?: string,
+): Promise<void> {
+  await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE "order" SET status = 'failed', updatedAt = unixepoch()
+       WHERE id = ? AND status <> 'paid'`,
+    ).bind(orderId),
+    env.DB.prepare(
+      `UPDATE coupon
+       SET status = CASE
+             WHEN revoked_at IS NOT NULL THEN 'revoked'
+             WHEN expires_at <= unixepoch() THEN 'expired'
+             ELSE 'active'
+           END,
+           reservation_id = NULL, reserved_by_user_id = NULL,
+           reserved_organization_id = NULL, reserved_at = NULL,
+           reservation_expires_at = NULL, updatedAt = unixepoch()
+       WHERE id = (SELECT coupon_id FROM "order" WHERE id = ? AND status = 'failed')
+         AND redeemed_at IS NULL AND reservation_id =
+             (SELECT coupon_reservation_id FROM "order" WHERE id = ? AND status = 'failed')`,
+    ).bind(orderId, orderId),
+    ...(eventId ? [completedEventStatement(env, eventId)] : []),
+  ]);
+}
+
+/** Same conditional release keyed by Stripe's PaymentIntent id for webhooks. */
+export async function failDirectQrIntent(
+  env: Env,
+  paymentIntentId: string,
+  eventId?: string,
+): Promise<void> {
+  await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE "order" SET status = 'failed', updatedAt = unixepoch()
+       WHERE provider_session_id = ? AND status <> 'paid'`,
+    ).bind(paymentIntentId),
+    env.DB.prepare(
+      `UPDATE coupon
+       SET status = CASE
+             WHEN revoked_at IS NOT NULL THEN 'revoked'
+             WHEN expires_at <= unixepoch() THEN 'expired'
+             ELSE 'active'
+           END,
+           reservation_id = NULL, reserved_by_user_id = NULL,
+           reserved_organization_id = NULL, reserved_at = NULL,
+           reservation_expires_at = NULL, updatedAt = unixepoch()
+       WHERE id = (SELECT coupon_id FROM "order"
+                   WHERE provider_session_id = ? AND status = 'failed')
+         AND redeemed_at IS NULL AND reservation_id =
+             (SELECT coupon_reservation_id FROM "order"
+              WHERE provider_session_id = ? AND status = 'failed')`,
+    ).bind(paymentIntentId, paymentIntentId),
+    ...(eventId ? [completedEventStatement(env, eventId)] : []),
+  ]);
+}
+
+function confirmCouponStatement(
+  env: Env,
+  order: StoredOrder,
+  userId: string,
+  organizationId: string,
+) {
+  return env.DB.prepare(
+    `UPDATE coupon
+     SET status = CASE
+           WHEN status = 'used' AND redeemed_at IS NOT NULL AND reservation_id = ? THEN 'used'
+           WHEN status = 'reserved' AND redeemed_at IS NULL AND revoked_at IS NULL
+             AND reservation_id = ? AND reserved_by_user_id = ?
+             AND reserved_organization_id = ? THEN 'used'
+           ELSE NULL
+         END,
+         redeemed_by_user_id = CASE
+           WHEN status = 'reserved' AND redeemed_at IS NULL AND revoked_at IS NULL
+             AND reservation_id = ? AND reserved_by_user_id = ?
+             AND reserved_organization_id = ? THEN ?
+           ELSE redeemed_by_user_id
+         END,
+         redeemed_organization_id = CASE
+           WHEN status = 'reserved' AND redeemed_at IS NULL AND revoked_at IS NULL
+             AND reservation_id = ? AND reserved_by_user_id = ?
+             AND reserved_organization_id = ? THEN ?
+           ELSE redeemed_organization_id
+         END,
+         redeemed_at = CASE
+           WHEN status = 'reserved' AND redeemed_at IS NULL AND revoked_at IS NULL
+             AND reservation_id = ? AND reserved_by_user_id = ?
+             AND reserved_organization_id = ? THEN unixepoch()
+           ELSE redeemed_at
+         END,
+         updatedAt = unixepoch()
+     WHERE id = ?`,
+  ).bind(
+    order.coupon_reservation_id,
+    order.coupon_reservation_id,
+    userId,
+    organizationId,
+    order.coupon_reservation_id,
+    userId,
+    organizationId,
+    userId,
+    order.coupon_reservation_id,
+    userId,
+    organizationId,
+    organizationId,
+    order.coupon_reservation_id,
+    userId,
+    organizationId,
+    order.coupon_id,
+  );
 }
 
 export async function createDirectQrCheckout(params: {
@@ -196,12 +488,13 @@ export async function createDirectQrCheckout(params: {
   planId: string;
   method: QrPaymentMethod;
   appUrl: string;
+  couponCode?: unknown;
 }): Promise<{ orderId: string; payment: DirectQrPayment }> {
   const plan = getPaidPlan(params.env, params.planId);
   if (!plan) throw new DirectQrError("invalid_plan", "This paid plan is not configured", 400);
 
   const { currency, methods, enabled, reason } = resolveAvailability(params.env, params.userId);
-  const amount = toMinorUnits(plan.monthlyPrice, currency);
+  const baseAmount = toMinorUnits(plan.monthlyPrice, currency);
   if (!enabled) {
     logEvent("warn", "billing.direct_qr_blocked", {
       reason,
@@ -227,15 +520,29 @@ export async function createDirectQrCheckout(params: {
   // orphan row behind, and the catch block below can release intents with it.
   const stripe = createStripe(params.env);
   const orderId = crypto.randomUUID();
-  await params.env.DB.prepare(
-    `INSERT INTO "order"
-     (id, organization_id, provider, kind, plan_id, amount, currency, credits,
-      status, createdAt, updatedAt)
-     VALUES (?, ?, 'stripe', 'credit_pack', ?, ?, ?, ?, 'created',
-             unixepoch(), unixepoch())`,
-  )
-    .bind(orderId, params.organizationId, plan.id, amount, currency, plan.credits)
-    .run();
+  const coupon = await loadCouponReservation({
+    env: params.env,
+    couponCode: params.couponCode,
+    userId: params.userId,
+    organizationId: params.organizationId,
+    orderId,
+    planId: plan.id,
+    currency,
+    credits: plan.credits,
+    baseAmount,
+  });
+  const amount = coupon?.amount ?? baseAmount;
+  if (!coupon) {
+    await params.env.DB.prepare(
+      `INSERT INTO "order"
+       (id, organization_id, provider, kind, plan_id, amount, currency, credits,
+        base_amount, discount_amount, discount_rate_bps, status, createdAt, updatedAt)
+       VALUES (?, ?, 'stripe', 'credit_pack', ?, ?, ?, ?, ?, 0, 0, 'created',
+               unixepoch(), unixepoch())`,
+    )
+      .bind(orderId, params.organizationId, plan.id, amount, currency, plan.credits, baseAmount)
+      .run();
+  }
 
   // The intent this request created, if any, so the failure path can release it
   // and so a settled payment is never cancelled or marked failed.
@@ -260,6 +567,16 @@ export async function createDirectQrCheckout(params: {
         userId: params.userId,
         planId: plan.id,
         flow: DIRECT_QR_FLOW,
+        ...(coupon
+          ? {
+              couponId: coupon.id,
+              couponCode: coupon.code,
+              couponReservationId: coupon.reservationId,
+              baseAmount: String(baseAmount),
+              discountAmount: String(coupon.discountAmount),
+              discountRateBps: String(coupon.discountRateBps),
+            }
+          : {}),
       },
     };
     if (customerId) intentParams.customer = customerId;
@@ -292,8 +609,8 @@ export async function createDirectQrCheckout(params: {
       // Nothing to show: release the intent instead of leaving a payable code
       // stranded in Stripe. Clearing `intentId` keeps the catch block from
       // cancelling twice.
-      await cancelQuietly(stripe, intent.id);
-      intentId = null;
+      const canceled = await cancelQuietly(stripe, intent.id);
+      if (canceled?.status === "canceled") intentId = null;
       logEvent("error", "billing.direct_qr_no_presentation", {
         paymentIntentId: intent.id,
         status: intent.status,
@@ -322,7 +639,7 @@ export async function createDirectQrCheckout(params: {
         paymentIntentId: intent.id,
         method: params.method,
         currency,
-        amount: plan.monthlyPrice,
+        amount: fromMinorUnits(amount, currency),
         ...presentation,
       },
     };
@@ -330,14 +647,32 @@ export async function createDirectQrCheckout(params: {
     // Release anything this request made payable. A settled payment is left
     // alone: the credits are already granted and the customer must not be
     // refunded by us cancelling behind their wallet's back.
-    if (intentId && !settled) await cancelQuietly(stripe, intentId);
-    if (!settled) {
-      await params.env.DB.prepare(
-        `UPDATE "order" SET status = 'failed', updatedAt = unixepoch()
-         WHERE id = ? AND status <> 'paid'`,
-      )
-        .bind(orderId)
-        .run();
+    let canRelease = !intentId;
+    if (intentId && !settled) {
+      const canceled = await cancelQuietly(stripe, intentId);
+      if (canceled) {
+        canRelease = canceled.status === "canceled";
+      } else {
+        // A timeout after Stripe accepted the payment must be recoverable. If
+        // Stripe says it succeeded, fulfill it now; otherwise leave the order
+        // pending for the scheduled reconciliation sweep.
+        try {
+          const current = await stripe.paymentIntents.retrieve(intentId);
+          if (current.status === "succeeded") {
+            await fulfillDirectQrIntent(params.env, current);
+            settled = true;
+          }
+        } catch (reconcileError) {
+          logEvent("warn", "billing.direct_qr_create_reconcile_pending", {
+            orderId,
+            paymentIntentId: intentId,
+            message: errorMessage(reconcileError),
+          });
+        }
+      }
+    }
+    if (!settled && canRelease) {
+      await failDirectQrOrder(params.env, orderId);
     }
     throw error;
   }
@@ -402,7 +737,12 @@ export async function cancelDirectQrIntent(params: {
 
   // The dialog stops polling on success, so grant before returning it. Keep
   // this outside the cancellation catch: database failures must remain retryable.
-  if (intent.status === "succeeded") await fulfillDirectQrIntent(params.env, intent);
+  if (intent.status === "succeeded") {
+    await fulfillDirectQrIntent(params.env, intent);
+  } else if (intent.status === "canceled" || intent.status === "requires_payment_method") {
+    const orderId = metadataValue(intent.metadata, "orderId");
+    if (orderId) await failDirectQrOrder(params.env, orderId);
+  }
   return toDirectQrStatus(intent.status);
 }
 
@@ -443,7 +783,10 @@ export async function fulfillDirectQrIntent(
   if (!orderId) throw new DirectQrUnfulfillableError("Direct QR intent is missing orderId");
 
   const storedOrder = await env.DB.prepare(
-    `SELECT id, organization_id, plan_id, kind, credits FROM "order" WHERE id = ?`,
+    `SELECT id, organization_id, plan_id, kind, credits,
+            coupon_id, coupon_code, coupon_reservation_id,
+            base_amount, discount_amount, discount_rate_bps
+     FROM "order" WHERE id = ?`,
   )
     .bind(orderId)
     .first<StoredOrder>();
@@ -465,6 +808,14 @@ export async function fulfillDirectQrIntent(
     throw new DirectQrUnfulfillableError("Direct QR order has an invalid credit pack");
   }
 
+  const payerUserId = metadataValue(intent.metadata, "userId");
+  if (storedOrder.coupon_id && !storedOrder.coupon_reservation_id) {
+    throw new DirectQrUnfulfillableError("Direct QR coupon reservation is missing");
+  }
+  if (storedOrder.coupon_id && !payerUserId) {
+    throw new DirectQrUnfulfillableError("Direct QR coupon payer is missing");
+  }
+
   const result = await grantCredits({
     env,
     organizationId: storedOrder.organization_id,
@@ -474,6 +825,10 @@ export async function fulfillDirectQrIntent(
     referenceType: "stripe_direct_qr",
     referenceId: intent.id,
     transaction: {
+      before:
+        storedOrder.coupon_id && storedOrder.coupon_reservation_id && payerUserId
+          ? [confirmCouponStatement(env, storedOrder, payerUserId, storedOrder.organization_id)]
+          : [],
       after: [
         env.DB.prepare(
           `UPDATE "order"
@@ -487,16 +842,6 @@ export async function fulfillDirectQrIntent(
   });
 
   return { duplicate: result.duplicate };
-}
-
-/** Order status is only ever moved forward out of a pending state. */
-async function markOrderFailed(env: Env, orderId: string) {
-  await env.DB.prepare(
-    `UPDATE "order" SET status = 'failed', updatedAt = unixepoch()
-     WHERE id = ? AND status <> 'paid'`,
-  )
-    .bind(orderId)
-    .run();
 }
 
 /**
@@ -606,13 +951,13 @@ async function sweepDirectQrOrder(
   // No intent id means the request died before Stripe answered, so there is
   // nothing payable to release.
   if (!candidate.paymentIntentId) {
-    await markOrderFailed(env, candidate.id);
+    await failDirectQrOrder(env, candidate.id);
     return "failed";
   }
 
   try {
     await stripe.paymentIntents.cancel(candidate.paymentIntentId);
-    await markOrderFailed(env, candidate.id);
+    await failDirectQrOrder(env, candidate.id);
     return "canceled";
   } catch (error) {
     let current: Stripe.PaymentIntent | null = null;
@@ -644,7 +989,7 @@ async function sweepDirectQrOrder(
     }
 
     if (current.status === "canceled") {
-      await markOrderFailed(env, candidate.id);
+      await failDirectQrOrder(env, candidate.id);
       return "failed";
     }
 

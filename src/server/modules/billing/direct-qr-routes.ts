@@ -14,6 +14,7 @@ import {
   cancelDirectQrIntent,
   createDirectQrCheckout,
   DirectQrError,
+  failDirectQrOrder,
   fulfillDirectQrIntent,
   getDirectQrAvailability,
   loadOwnedDirectQrIntent,
@@ -29,6 +30,7 @@ import { StripeConfigurationError } from "./stripe";
 const createQrCheckoutSchema = z.object({
   planId: z.enum(["pro", "scale"]),
   method: z.enum(QR_PAYMENT_METHODS),
+  couponCode: z.string().optional(),
 });
 
 export const directQrRoutes = new Hono<AppContext>();
@@ -83,6 +85,7 @@ directQrRoutes.post(
         planId: context.req.valid("json").planId,
         method: context.req.valid("json").method,
         appUrl,
+        couponCode: context.req.valid("json").couponCode,
       });
       // The order id stays server-side: the dialog only ever needs the payment,
       // and the intent id it carries is what every later call is keyed by.
@@ -142,6 +145,9 @@ directQrRoutes.get("/:id", requireAuth, requireWorkspaceManager, async (context)
           message: error instanceof Error ? error.message : String(error),
         });
       }
+    } else if (status === "failed" || status === "canceled") {
+      const orderId = intent.metadata?.orderId;
+      if (orderId) await failDirectQrOrder(context.env, orderId);
     }
 
     return context.json({ data: { status } }, 200, NO_STORE);
