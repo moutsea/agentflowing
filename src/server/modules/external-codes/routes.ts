@@ -283,6 +283,10 @@ redemptionRoutes.delete("/:code", async (context) => {
   }
 });
 
+redemptionRoutes.all("*", (context) =>
+  context.json({ error: "not_found", message: "Not found" }, 404, NO_STORE),
+);
+
 const couponRoutes = new Hono<AppContext>();
 couponRoutes.use("*", requireExternalToken("coupon"));
 

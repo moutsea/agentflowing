@@ -110,6 +110,22 @@ describe("external code token isolation", () => {
 });
 
 describe("external redemption-code API", () => {
+  it("returns 404 for unmatched methods and paths after token authentication", async () => {
+    const unmatchedMethod = await request("/api/external/redemption-codes", {
+      headers: tokenHeaders(redemptionToken),
+    });
+    expect(unmatchedMethod.status).toBe(404);
+    expect(unmatchedMethod.headers.get("cache-control")).toBe("no-store");
+    expect(unmatchedMethod.headers.get("x-request-id")).toMatch(/^[a-f0-9-]{36}$/);
+
+    const unmatchedPath = await request("/api/external/redemption-codes/issuance-status/extra", {
+      headers: tokenHeaders(redemptionToken),
+    });
+    expect(unmatchedPath.status).toBe(404);
+    expect(unmatchedPath.headers.get("cache-control")).toBe("no-store");
+    expect(unmatchedPath.headers.get("x-request-id")).toMatch(/^[a-f0-9-]{36}$/);
+  });
+
   it("issues at most 100, replays idempotently, and exposes issuance status", async () => {
     const tooMany = await request("/api/external/redemption-codes", {
       method: "POST",
