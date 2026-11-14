@@ -63,7 +63,7 @@ CREATE UNIQUE INDEX `redemption_code_code_uidx` ON `redemption_code` (`code`);--
 CREATE UNIQUE INDEX `redemption_code_idempotency_batch_uidx` ON `redemption_code` (`idempotency_key`,`batch_index`);--> statement-breakpoint
 CREATE INDEX `redemption_code_created_at_idx` ON `redemption_code` (`createdAt`);--> statement-breakpoint
 CREATE INDEX `redemption_code_expires_at_idx` ON `redemption_code` (`expires_at`);--> statement-breakpoint
-ALTER TABLE `order` ADD `coupon_id` text REFERENCES coupon(id);--> statement-breakpoint
+ALTER TABLE `order` ADD `coupon_id` text REFERENCES coupon(id) ON DELETE SET NULL;--> statement-breakpoint
 ALTER TABLE `order` ADD `coupon_code` text;--> statement-breakpoint
 ALTER TABLE `order` ADD `base_amount` integer;--> statement-breakpoint
 ALTER TABLE `order` ADD `discount_amount` integer;--> statement-breakpoint
