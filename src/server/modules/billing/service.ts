@@ -5,6 +5,14 @@ import { agentRun, creditAccount, creditLedger } from "../../db/schema";
 import { readRuntimeNumber } from "../../env";
 import { logEvent } from "../../observability";
 
+export {
+  createCreditGrantStatement,
+  grantCredits,
+  type CreditGrantParams,
+  type CreditGrantResult,
+  type CreditGrantTransaction,
+} from "./credit-grant";
+
 export const DEFAULT_STALE_AGENT_RUN_SECONDS = 30 * 60;
 export const STALE_AGENT_RUN_BATCH_SIZE = 100;
 

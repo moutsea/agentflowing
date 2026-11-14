@@ -4,6 +4,7 @@ import { readRuntimeString } from "../../env";
 import { logEvent } from "../../observability";
 import { getPaidPlan, getPlan } from "./catalog";
 import { isDirectQrIntent } from "./direct-qr";
+import { grantCredits } from "./credit-grant";
 // Circular with this module: `direct-qr-service` builds its intents with the
 // client factory below. Only request handlers touch either binding, so the
 // cycle resolves before anything is called.
@@ -298,40 +299,46 @@ async function fulfillCheckout(env: Env, eventId: string, session: Stripe.Checko
   if (!subscriptionId) throw new Error("Checkout did not create a subscription");
   const customerId = objectId(session.customer);
 
-  await env.DB.batch([
-    env.DB.prepare(
-      `INSERT INTO subscription
-       (id, organization_id, provider, provider_customer_id, provider_subscription_id,
-        plan_id, status, cancel_at_period_end, createdAt, updatedAt)
-       VALUES (?, ?, 'stripe', ?, ?, ?, 'active', 0, unixepoch(), unixepoch())
-       ON CONFLICT(provider, provider_subscription_id) DO UPDATE SET
-         organization_id = excluded.organization_id,
-         provider_customer_id = excluded.provider_customer_id,
-         plan_id = excluded.plan_id,
-         status = 'active',
-         updatedAt = unixepoch()`,
-    ).bind(crypto.randomUUID(), storedOrder.organization_id, customerId, subscriptionId, plan.id),
-    env.DB.prepare(
-      `INSERT OR IGNORE INTO credit_ledger
-       (id, organization_id, delta, type, idempotency_key, description,
-        reference_type, reference_id, created_at)
-       VALUES (?, ?, ?, 'grant', ?, ?, 'stripe_checkout', ?, unixepoch())`,
-    ).bind(
-      crypto.randomUUID(),
-      storedOrder.organization_id,
-      plan.credits,
-      `stripe:checkout:${session.id}`,
-      `${plan.name} subscription credits`,
-      session.id,
-    ),
-    env.DB.prepare(
-      `UPDATE "order"
-       SET provider_session_id = ?, amount = ?, status = 'paid', paid_at = unixepoch(),
-           updatedAt = unixepoch()
-       WHERE id = ?`,
-    ).bind(session.id, session.amount_total ?? plan.monthlyPrice * 100, storedOrder.id),
-    completedEventStatement(env, eventId),
-  ]);
+  await grantCredits({
+    env,
+    organizationId: storedOrder.organization_id,
+    credits: plan.credits,
+    idempotencyKey: `stripe:checkout:${session.id}`,
+    description: `${plan.name} subscription credits`,
+    referenceType: "stripe_checkout",
+    referenceId: session.id,
+    transaction: {
+      before: [
+        env.DB.prepare(
+          `INSERT INTO subscription
+           (id, organization_id, provider, provider_customer_id, provider_subscription_id,
+            plan_id, status, cancel_at_period_end, createdAt, updatedAt)
+           VALUES (?, ?, 'stripe', ?, ?, ?, 'active', 0, unixepoch(), unixepoch())
+           ON CONFLICT(provider, provider_subscription_id) DO UPDATE SET
+             organization_id = excluded.organization_id,
+             provider_customer_id = excluded.provider_customer_id,
+             plan_id = excluded.plan_id,
+             status = 'active',
+             updatedAt = unixepoch()`,
+        ).bind(
+          crypto.randomUUID(),
+          storedOrder.organization_id,
+          customerId,
+          subscriptionId,
+          plan.id,
+        ),
+      ],
+      after: [
+        env.DB.prepare(
+          `UPDATE "order"
+           SET provider_session_id = ?, amount = ?, status = 'paid', paid_at = unixepoch(),
+               updatedAt = unixepoch()
+           WHERE id = ?`,
+        ).bind(session.id, session.amount_total ?? plan.monthlyPrice * 100, storedOrder.id),
+        completedEventStatement(env, eventId),
+      ],
+    },
+  });
 }
 
 async function syncSubscription(
@@ -405,28 +412,26 @@ async function fulfillRenewal(env: Env, eventId: string, invoice: Stripe.Invoice
     throw new Error("Renewal invoice cannot be mapped to a paid workspace plan");
   }
 
-  await env.DB.batch([
-    env.DB.prepare(
-      `INSERT OR IGNORE INTO credit_ledger
-       (id, organization_id, delta, type, idempotency_key, description,
-        reference_type, reference_id, created_at)
-       VALUES (?, ?, ?, 'grant', ?, ?, 'stripe_invoice', ?, unixepoch())`,
-    ).bind(
-      crypto.randomUUID(),
-      organizationId,
-      plan.credits,
-      `stripe:invoice:${invoice.id}`,
-      `${plan.name} renewal credits`,
-      invoice.id,
-    ),
-    env.DB.prepare(
-      `UPDATE subscription
-       SET status = 'active', current_period_start = ?, current_period_end = ?,
-           updatedAt = unixepoch()
-       WHERE provider = 'stripe' AND provider_subscription_id = ?`,
-    ).bind(invoice.period_start, invoice.period_end, subscriptionId),
-    completedEventStatement(env, eventId),
-  ]);
+  await grantCredits({
+    env,
+    organizationId,
+    credits: plan.credits,
+    idempotencyKey: `stripe:invoice:${invoice.id}`,
+    description: `${plan.name} renewal credits`,
+    referenceType: "stripe_invoice",
+    referenceId: invoice.id,
+    transaction: {
+      after: [
+        env.DB.prepare(
+          `UPDATE subscription
+           SET status = 'active', current_period_start = ?, current_period_end = ?,
+               updatedAt = unixepoch()
+           WHERE provider = 'stripe' AND provider_subscription_id = ?`,
+        ).bind(invoice.period_start, invoice.period_end, subscriptionId),
+        completedEventStatement(env, eventId),
+      ],
+    },
+  });
 }
 
 async function markSubscriptionPastDue(env: Env, eventId: string, invoice: Stripe.Invoice) {

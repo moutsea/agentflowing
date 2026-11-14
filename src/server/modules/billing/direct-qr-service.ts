@@ -18,6 +18,7 @@ import {
   presentDirectQr,
   toDirectQrStatus,
 } from "./direct-qr";
+import { grantCredits } from "./credit-grant";
 import { completedEventStatement, createStripe } from "./stripe";
 
 /**
@@ -464,30 +465,28 @@ export async function fulfillDirectQrIntent(
     throw new DirectQrUnfulfillableError("Direct QR order has an invalid credit pack");
   }
 
-  const [ledgerResult] = await env.DB.batch([
-    env.DB.prepare(
-      `INSERT OR IGNORE INTO credit_ledger
-       (id, organization_id, delta, type, idempotency_key, description,
-        reference_type, reference_id, created_at)
-       VALUES (?, ?, ?, 'grant', ?, ?, 'stripe_direct_qr', ?, unixepoch())`,
-    ).bind(
-      crypto.randomUUID(),
-      storedOrder.organization_id,
-      storedOrder.credits,
-      `stripe:direct_qr:${intent.id}`,
-      `${getPlan(storedOrder.plan_id)?.name ?? storedOrder.plan_id} credit pack`,
-      intent.id,
-    ),
-    env.DB.prepare(
-      `UPDATE "order"
-       SET status = 'paid', paid_at = unixepoch(), amount = ?, provider_session_id = ?,
-           updatedAt = unixepoch()
-       WHERE id = ? AND status <> 'paid'`,
-    ).bind(intent.amount_received, intent.id, storedOrder.id),
-    ...(eventId ? [completedEventStatement(env, eventId)] : []),
-  ]);
+  const result = await grantCredits({
+    env,
+    organizationId: storedOrder.organization_id,
+    credits: storedOrder.credits,
+    idempotencyKey: `stripe:direct_qr:${intent.id}`,
+    description: `${getPlan(storedOrder.plan_id)?.name ?? storedOrder.plan_id} credit pack`,
+    referenceType: "stripe_direct_qr",
+    referenceId: intent.id,
+    transaction: {
+      after: [
+        env.DB.prepare(
+          `UPDATE "order"
+           SET status = 'paid', paid_at = unixepoch(), amount = ?, provider_session_id = ?,
+               updatedAt = unixepoch()
+           WHERE id = ? AND status <> 'paid'`,
+        ).bind(intent.amount_received, intent.id, storedOrder.id),
+        ...(eventId ? [completedEventStatement(env, eventId)] : []),
+      ],
+    },
+  });
 
-  return { duplicate: (ledgerResult?.meta.changes ?? 0) === 0 };
+  return { duplicate: result.duplicate };
 }
 
 /** Order status is only ever moved forward out of a pending state. */
