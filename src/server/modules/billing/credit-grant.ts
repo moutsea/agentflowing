@@ -6,7 +6,9 @@ import { creditAccount, creditLedger } from "../../db/schema";
 /**
  * Statements that must be committed with a grant. Statements in `before` are
  * useful for an atomic claim; statements in `after` are useful for marking the
- * payment or recovery record that caused the grant.
+ * payment or recovery record that caused the grant. Every `before` statement
+ * must either affect a row or already have a ledger entry for this grant key
+ * (the latter is the idempotent replay path).
  */
 export type CreditGrantTransaction = {
   before?: readonly D1PreparedStatement[];
@@ -73,6 +75,28 @@ export function createCreditGrantStatement(
 }
 
 /**
+ * Keep a conditional claim and its grant inside the same D1 batch. SQLite's
+ * `changes()` reports the preceding statement's affected-row count; the
+ * NOT NULL branch deliberately aborts the batch when a claim lost its race
+ * and this grant key has not already been committed. Setting the same account
+ * timestamp keeps `changes()` positive so multiple before statements can each
+ * be checked without changing application data.
+ */
+function createBeforeGuardStatement(params: CreditGrantParams): D1PreparedStatement {
+  return params.env.DB.prepare(
+    `UPDATE credit_account
+     SET updated_at = CASE
+       WHEN changes() > 0 OR EXISTS (
+         SELECT 1 FROM credit_ledger
+         WHERE organization_id = ? AND idempotency_key = ?
+       ) THEN updated_at
+       ELSE NULL
+     END
+     WHERE organization_id = ?`,
+  ).bind(params.organizationId, params.idempotencyKey, params.organizationId);
+}
+
+/**
  * Insert one idempotent grant and return the committed ledger/account rows.
  * D1's unique index on `(organization_id, idempotency_key)` is the
  * concurrency boundary. A replay therefore returns the original ledger row
@@ -82,8 +106,12 @@ export async function grantCredits(params: CreditGrantParams): Promise<CreditGra
   const grant = createCreditGrantStatement(params);
   const before = params.transaction?.before ?? [];
   const after = params.transaction?.after ?? [];
-  const results = await params.env.DB.batch([...before, grant.statement, ...after]);
-  const grantResult = results[before.length];
+  const guardedBefore = before.flatMap((statement) => [
+    statement,
+    createBeforeGuardStatement(params),
+  ]);
+  const results = await params.env.DB.batch([...guardedBefore, grant.statement, ...after]);
+  const grantResult = results[guardedBefore.length];
 
   const database = createDatabase(params.env);
   const [ledger] = await database

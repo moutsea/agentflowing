@@ -389,13 +389,55 @@ describe("fulfillDirectQrIntent", () => {
     const { orderId, paymentIntentId } = await seedDirectQrOrder(workspace.organizationId);
     const intent = succeededIntent(orderId, workspace.organizationId, {}, paymentIntentId);
 
-    expect(await fulfillDirectQrIntent(env, intent)).toEqual({ duplicate: false });
-    // The status poll and the webhook both land here for one payment.
-    expect(await fulfillDirectQrIntent(env, intent)).toEqual({ duplicate: true });
-    expect(await fulfillDirectQrIntent(env, intent)).toEqual({ duplicate: true });
+    const results = await Promise.all(
+      Array.from({ length: 3 }, () => fulfillDirectQrIntent(env, intent)),
+    );
+    // The status poll and the webhook can land here at the same time.
+    expect(results.filter((result) => !result.duplicate)).toHaveLength(1);
+    expect(results.filter((result) => result.duplicate)).toHaveLength(2);
 
     // Credited once, not three times.
     expect(await getBalance(workspace.organizationId)).toBe(5000);
+    expect(
+      await env.DB.prepare(
+        `SELECT count(*) AS count FROM credit_ledger
+         WHERE organization_id = ? AND idempotency_key = ?`,
+      )
+        .bind(workspace.organizationId, `stripe:direct_qr:${paymentIntentId}`)
+        .first<{ count: number }>(),
+    ).toEqual({ count: 1 });
+  });
+
+  it("rolls back the grant when the order marker fails", async () => {
+    const workspace = await seedWorkspace();
+    const { orderId, paymentIntentId } = await seedDirectQrOrder(workspace.organizationId);
+    const triggerName = `reject_qr_order_${workspace.suffix.replaceAll("-", "")}`;
+    await env.DB.prepare(
+      `CREATE TRIGGER "${triggerName}" BEFORE UPDATE ON "order"
+       BEGIN SELECT RAISE(ABORT, 'temporary order marker failure'); END`,
+    ).run();
+
+    try {
+      await expect(
+        fulfillDirectQrIntent(
+          env,
+          succeededIntent(orderId, workspace.organizationId, {}, paymentIntentId),
+        ),
+      ).rejects.toThrow("temporary order marker failure");
+    } finally {
+      await env.DB.prepare(`DROP TRIGGER "${triggerName}"`).run();
+    }
+
+    expect(await getBalance(workspace.organizationId)).toBe(0);
+    expect(await getOrderStatus(orderId)).toMatchObject({ status: "processing" });
+    expect(
+      await env.DB.prepare(
+        `SELECT count(*) AS count FROM credit_ledger
+         WHERE organization_id = ? AND idempotency_key = ?`,
+      )
+        .bind(workspace.organizationId, `stripe:direct_qr:${paymentIntentId}`)
+        .first<{ count: number }>(),
+    ).toEqual({ count: 0 });
   });
 
   it("refuses an intent that has not been paid", async () => {
