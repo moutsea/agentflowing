@@ -548,6 +548,93 @@ describe("direct QR coupon checkout", () => {
     expect(await orderRow(paidCheckout.orderId)).toMatchObject({ status: "paid" });
   });
 
+  it("lets a late payment success win after a generic failure signal", async () => {
+    const stripe = stripeFetchMock();
+    const workspace = await seedWorkspace();
+    const coupon = await issueCoupon({ env, rate: 20 });
+    const checkout = await createDirectQrCheckout({
+      env: configuredEnv(),
+      organizationId: workspace.organizationId,
+      userId: workspace.userId,
+      userEmail: `${workspace.userId}@example.com`,
+      planId: "pro",
+      method: "wechat_pay",
+      appUrl: env.APP_URL,
+      couponCode: coupon.code,
+    });
+    const paid = succeededIntent(stripe.created[0]!);
+
+    await failDirectQrOrder(env, checkout.orderId);
+    await fulfillDirectQrIntent(env, paid);
+
+    expect(await couponRow(coupon.id)).toMatchObject({
+      status: "used",
+      reservationId: checkout.orderId,
+      redeemedByUserId: workspace.userId,
+    });
+    expect(await orderRow(checkout.orderId)).toMatchObject({ status: "paid" });
+    expect(await balance(workspace.organizationId)).toBe(5_000);
+    expect(
+      await env.DB.prepare(
+        `SELECT COUNT(*) AS count FROM credit_ledger
+         WHERE organization_id = ? AND idempotency_key = ?`,
+      )
+        .bind(workspace.organizationId, `stripe:direct_qr:${paid.id}`)
+        .first<{ count: number }>(),
+    ).toEqual({ count: 1 });
+  });
+
+  it("recovers a succeeded payment when provider-session persistence was lost", async () => {
+    const stripe = stripeFetchMock();
+    const workspace = await seedWorkspace();
+    const coupon = await issueCoupon({ env, rate: 20 });
+    const checkout = await createDirectQrCheckout({
+      env: configuredEnv(),
+      organizationId: workspace.organizationId,
+      userId: workspace.userId,
+      userEmail: `${workspace.userId}@example.com`,
+      planId: "pro",
+      method: "wechat_pay",
+      appUrl: env.APP_URL,
+      couponCode: coupon.code,
+    });
+    const paid = succeededIntent(stripe.created[0]!);
+
+    // Model a provider-session write that failed after Stripe accepted the intent.
+    await env.DB.prepare(
+      `UPDATE "order" SET provider_session_id = NULL, createdAt = unixepoch() - 3_601
+       WHERE id = ?`,
+    )
+      .bind(checkout.orderId)
+      .run();
+
+    await expect(
+      expireStaleDirectQrOrders({
+        env: configuredEnv(),
+        staleAfterSeconds: 3_600,
+        stripe: {
+          paymentIntents: {
+            cancel: async () => {
+              throw new Error("Stripe timeout");
+            },
+            retrieve: async () => {
+              throw new Error("Stripe timeout");
+            },
+            search: async () => ({ data: [paid] }),
+          },
+        } as never,
+      }),
+    ).resolves.toEqual({ canceled: 0, recovered: 1, failed: 0 });
+
+    expect(await couponRow(coupon.id)).toMatchObject({
+      status: "used",
+      reservationId: checkout.orderId,
+      redeemedByUserId: workspace.userId,
+    });
+    expect(await orderRow(checkout.orderId)).toMatchObject({ status: "paid" });
+    expect(await balance(workspace.organizationId)).toBe(5_000);
+  });
+
   it("keeps a direct QR fulfillment idempotent even when called beside the webhook", async () => {
     const stripe = stripeFetchMock();
     const workspace = await seedWorkspace();

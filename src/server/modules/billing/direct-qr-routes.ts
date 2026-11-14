@@ -14,7 +14,7 @@ import {
   cancelDirectQrIntent,
   createDirectQrCheckout,
   DirectQrError,
-  failDirectQrOrder,
+  failDirectQrIntent,
   fulfillDirectQrIntent,
   getDirectQrAvailability,
   loadOwnedDirectQrIntent,
@@ -68,6 +68,7 @@ directQrRoutes.post(
       return context.json(
         { error: "billing_not_configured", message: "APP_URL is not configured" },
         503,
+        NO_STORE,
       );
     }
     await enforceRateLimit({
@@ -99,10 +100,14 @@ directQrRoutes.post(
       return context.json({ data: result.payment }, 201, NO_STORE);
     } catch (error) {
       if (error instanceof DirectQrError) {
-        return context.json({ error: error.code, message: error.message }, error.status);
+        return context.json({ error: error.code, message: error.message }, error.status, NO_STORE);
       }
       if (error instanceof StripeConfigurationError) {
-        return context.json({ error: "billing_not_configured", message: error.message }, 503);
+        return context.json(
+          { error: "billing_not_configured", message: error.message },
+          503,
+          NO_STORE,
+        );
       }
       throw error;
     }
@@ -146,8 +151,7 @@ directQrRoutes.get("/:id", requireAuth, requireWorkspaceManager, async (context)
         });
       }
     } else if (status === "failed" || status === "canceled") {
-      const orderId = intent.metadata?.orderId;
-      if (orderId) await failDirectQrOrder(context.env, orderId);
+      await failDirectQrIntent(context.env, intent.id);
     }
 
     return context.json({ data: { status } }, 200, NO_STORE);

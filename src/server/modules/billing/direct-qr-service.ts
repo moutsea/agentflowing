@@ -130,6 +130,27 @@ function fromMinorUnits(amount: number, currency: string) {
   return ZERO_DECIMAL_CURRENCIES.has(currency) ? amount : amount / 100;
 }
 
+const PROVIDER_SESSION_WRITE_ATTEMPTS = 3;
+
+/** Persist the Stripe id before doing any work that can expose the QR. */
+async function persistDirectQrProviderSession(env: Env, orderId: string, paymentIntentId: string) {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < PROVIDER_SESSION_WRITE_ATTEMPTS; attempt += 1) {
+    try {
+      await env.DB.prepare(
+        `UPDATE "order" SET provider_session_id = ?, status = 'processing', updatedAt = unixepoch()
+         WHERE id = ?`,
+      )
+        .bind(paymentIntentId, orderId)
+        .run();
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
 /** Compute a percentage discount entirely in integer Stripe minor units. */
 export function selectMaximumDiscountRateBps(candidates: readonly number[]) {
   let maximum = 0;
@@ -364,10 +385,18 @@ async function cancelQuietly(stripe: Stripe, paymentIntentId: string) {
   }
 }
 
-/** Release a coupon only after the order has conditionally become unpaid. */
-export async function failDirectQrOrder(
+/**
+ * Mark an order failed and optionally release its coupon reservation.
+ *
+ * A caller that only knows the order id does not know whether Stripe has
+ * accepted the payment. It must leave a provider-linked reservation in place
+ * so a late success can still confirm it. Stripe-authoritative failure paths
+ * pass `releaseLinkedReservation: true` and can safely make the coupon active.
+ */
+async function failDirectQrOrderById(
   env: Env,
   orderId: string,
+  releaseLinkedReservation: boolean,
   eventId?: string,
 ): Promise<void> {
   await env.DB.batch([
@@ -387,10 +416,25 @@ export async function failDirectQrOrder(
            reservation_expires_at = NULL, updatedAt = unixepoch()
        WHERE id = (SELECT coupon_id FROM "order" WHERE id = ? AND status = 'failed')
          AND redeemed_at IS NULL AND reservation_id =
-             (SELECT coupon_reservation_id FROM "order" WHERE id = ? AND status = 'failed')`,
-    ).bind(orderId, orderId),
+             (SELECT coupon_reservation_id FROM "order" WHERE id = ? AND status = 'failed')
+         AND (? = 1 OR (SELECT provider_session_id FROM "order"
+                        WHERE id = ? AND status = 'failed') IS NULL)`,
+    ).bind(orderId, orderId, releaseLinkedReservation ? 1 : 0, orderId),
     ...(eventId ? [completedEventStatement(env, eventId)] : []),
   ]);
+}
+
+/**
+ * A generic order-only signal cannot prove that a Stripe payment failed. Keep
+ * provider-linked reservations until a Stripe-authoritative path resolves it;
+ * this is what lets a late success win the race without reopening the coupon.
+ */
+export async function failDirectQrOrder(
+  env: Env,
+  orderId: string,
+  eventId?: string,
+): Promise<void> {
+  await failDirectQrOrderById(env, orderId, false, eventId);
 }
 
 /** Same conditional release keyed by Stripe's PaymentIntent id for webhooks. */
@@ -547,6 +591,7 @@ export async function createDirectQrCheckout(params: {
   // The intent this request created, if any, so the failure path can release it
   // and so a settled payment is never cancelled or marked failed.
   let intentId: string | null = null;
+  let stripeCreateAttempted = false;
   let settled = false;
 
   try {
@@ -586,10 +631,17 @@ export async function createDirectQrCheckout(params: {
       intentParams.payment_method_options = { wechat_pay: { client: "web" } };
     }
 
+    stripeCreateAttempted = true;
     const intent = await stripe.paymentIntents.create(intentParams, {
       idempotencyKey: `agentflowing-direct-qr:${orderId}`,
     });
     intentId = intent.id;
+
+    // Write the association as soon as Stripe accepts the intent. If the D1
+    // write is transient, retry before presenting a payable QR; if it remains
+    // unavailable, the reconciliation sweep can still locate this intent by
+    // the order id in Stripe metadata.
+    await persistDirectQrProviderSession(params.env, orderId, intent.id);
 
     const presentation = presentDirectQr(params.method, intent.next_action);
     if (!presentation) {
@@ -624,13 +676,6 @@ export async function createDirectQrCheckout(params: {
       );
     }
 
-    await params.env.DB.prepare(
-      `UPDATE "order" SET provider_session_id = ?, status = 'processing', updatedAt = unixepoch()
-       WHERE id = ?`,
-    )
-      .bind(intent.id, orderId)
-      .run();
-
     return {
       orderId,
       // `amount` is major units, matching `DirectQrPayment`; the order row keeps
@@ -647,11 +692,16 @@ export async function createDirectQrCheckout(params: {
     // Release anything this request made payable. A settled payment is left
     // alone: the credits are already granted and the customer must not be
     // refunded by us cancelling behind their wallet's back.
-    let canRelease = !intentId;
+    // If the create request itself timed out, Stripe may have accepted it even
+    // though no id reached us. Leave the reservation for metadata-based sweep
+    // recovery instead of releasing it on an unconfirmed outcome.
+    let canRelease = !intentId && !stripeCreateAttempted;
+    let confirmedFailure = false;
     if (intentId && !settled) {
       const canceled = await cancelQuietly(stripe, intentId);
       if (canceled) {
-        canRelease = canceled.status === "canceled";
+        confirmedFailure = canceled.status === "canceled";
+        canRelease = false;
       } else {
         // A timeout after Stripe accepted the payment must be recoverable. If
         // Stripe says it succeeded, fulfill it now; otherwise leave the order
@@ -661,6 +711,8 @@ export async function createDirectQrCheckout(params: {
           if (current.status === "succeeded") {
             await fulfillDirectQrIntent(params.env, current);
             settled = true;
+          } else if (current.status === "canceled") {
+            confirmedFailure = true;
           }
         } catch (reconcileError) {
           logEvent("warn", "billing.direct_qr_create_reconcile_pending", {
@@ -671,7 +723,9 @@ export async function createDirectQrCheckout(params: {
         }
       }
     }
-    if (!settled && canRelease) {
+    if (!settled && confirmedFailure) {
+      await failDirectQrOrderById(params.env, orderId, true);
+    } else if (!settled && canRelease) {
       await failDirectQrOrder(params.env, orderId);
     }
     throw error;
@@ -740,8 +794,7 @@ export async function cancelDirectQrIntent(params: {
   if (intent.status === "succeeded") {
     await fulfillDirectQrIntent(params.env, intent);
   } else if (intent.status === "canceled" || intent.status === "requires_payment_method") {
-    const orderId = metadataValue(intent.metadata, "orderId");
-    if (orderId) await failDirectQrOrder(params.env, orderId);
+    await failDirectQrIntent(params.env, intent.id);
   }
   return toDirectQrStatus(intent.status);
 }
@@ -867,6 +920,7 @@ export type SweepStripe = {
   paymentIntents: {
     cancel(paymentIntentId: string): Promise<unknown>;
     retrieve(paymentIntentId: string): Promise<Stripe.PaymentIntent>;
+    search?(params: { query: string; limit?: number }): Promise<{ data: Stripe.PaymentIntent[] }>;
   };
 };
 
@@ -896,7 +950,15 @@ export async function expireStaleDirectQrOrders(params: {
     `SELECT id, provider_session_id AS paymentIntentId
      FROM "order"
      WHERE provider = 'stripe' AND kind = 'credit_pack'
-       AND status IN ('created', 'processing')
+       AND (
+         status IN ('created', 'processing')
+         OR (status = 'failed' AND EXISTS (
+           SELECT 1 FROM coupon
+           WHERE coupon.id = "order".coupon_id
+             AND coupon.status = 'reserved'
+             AND coupon.reservation_id = "order".coupon_reservation_id
+         ))
+       )
        AND createdAt <= unixepoch() - ?
      ORDER BY last_reconcile_attempt_at, createdAt, id
      LIMIT ?`,
@@ -914,7 +976,15 @@ export async function expireStaleDirectQrOrders(params: {
     try {
       const claimed = await params.env.DB.prepare(
         `UPDATE "order" SET last_reconcile_attempt_at = unixepoch()
-         WHERE id = ? AND status IN ('created', 'processing')`,
+         WHERE id = ? AND (
+           status IN ('created', 'processing')
+           OR (status = 'failed' AND EXISTS (
+             SELECT 1 FROM coupon
+             WHERE coupon.id = "order".coupon_id
+               AND coupon.status = 'reserved'
+               AND coupon.reservation_id = "order".coupon_reservation_id
+           ))
+         )`,
       )
         .bind(candidate.id)
         .run();
@@ -948,16 +1018,42 @@ async function sweepDirectQrOrder(
   stripe: SweepStripe,
   candidate: { id: string; paymentIntentId: string | null },
 ): Promise<SweepOutcome> {
-  // No intent id means the request died before Stripe answered, so there is
-  // nothing payable to release.
+  // A provider-session write can fail after Stripe created the intent. Search
+  // by the order metadata before deciding anything about the reservation; an
+  // unknown Stripe state must remain retryable rather than being failed away.
   if (!candidate.paymentIntentId) {
-    await failDirectQrOrder(env, candidate.id);
-    return "failed";
+    if (!stripe.paymentIntents.search) return "skipped";
+    let matches: { data: Stripe.PaymentIntent[] };
+    try {
+      matches = await stripe.paymentIntents.search({
+        query: `metadata['orderId']:'${candidate.id}'`,
+        limit: 1,
+      });
+    } catch (error) {
+      logEvent("warn", "billing.direct_qr_expire_search_failed", {
+        orderId: candidate.id,
+        message: errorMessage(error),
+      });
+      return "skipped";
+    }
+    const intent = matches.data.find(
+      (item) => metadataValue(item.metadata, "orderId") === candidate.id,
+    );
+    if (!intent) return "skipped";
+    if (intent.status === "succeeded") {
+      await fulfillDirectQrIntent(env, intent);
+      return "recovered";
+    }
+    if (intent.status === "canceled" || intent.status === "requires_payment_method") {
+      await failDirectQrOrderById(env, candidate.id, true);
+      return "failed";
+    }
+    return "skipped";
   }
 
   try {
     await stripe.paymentIntents.cancel(candidate.paymentIntentId);
-    await failDirectQrOrder(env, candidate.id);
+    await failDirectQrIntent(env, candidate.paymentIntentId);
     return "canceled";
   } catch (error) {
     let current: Stripe.PaymentIntent | null = null;
@@ -989,7 +1085,7 @@ async function sweepDirectQrOrder(
     }
 
     if (current.status === "canceled") {
-      await failDirectQrOrder(env, candidate.id);
+      await failDirectQrIntent(env, candidate.paymentIntentId);
       return "failed";
     }
 
