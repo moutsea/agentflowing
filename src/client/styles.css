@@ -3065,6 +3065,221 @@ button {
   }
 }
 
+/* Platform admin code management */
+.admin-codes-page {
+  max-width: 1280px;
+  margin-inline: auto;
+}
+.admin-codes-tabs {
+  display: flex;
+  gap: 6px;
+  margin-top: 25px;
+  border-bottom: 1px solid #dedad2;
+}
+.admin-codes-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  padding: 10px 12px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.admin-codes-tabs button.active {
+  border-bottom-color: var(--violet);
+  color: var(--violet);
+}
+.admin-codes-quota {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-top: 14px;
+  padding: 16px;
+}
+.admin-codes-quota div {
+  display: grid;
+  gap: 4px;
+}
+.admin-codes-quota span {
+  color: var(--muted);
+  font-size: 10px;
+}
+.admin-codes-quota strong {
+  font-size: 20px;
+  letter-spacing: -0.03em;
+}
+.admin-codes-quota .form-error {
+  grid-column: 1 / -1;
+}
+.admin-codes-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+  margin-top: 14px;
+}
+.admin-codes-form,
+.admin-codes-search,
+.admin-codes-issued {
+  min-width: 0;
+  padding: 22px;
+}
+.admin-codes-form fieldset {
+  display: grid;
+  gap: 13px;
+  margin: 20px 0 0;
+  padding: 0;
+  border: 0;
+}
+.admin-codes-form label,
+.admin-codes-search-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+.admin-codes-form input,
+.admin-codes-form textarea,
+.admin-codes-search-form input {
+  width: 100%;
+  border: 1px solid #d8d4ca;
+  border-radius: 9px;
+  padding: 9px 10px;
+  color: var(--ink);
+  background: #fffefa;
+  font: inherit;
+  font-size: 12px;
+}
+.admin-codes-form textarea {
+  resize: vertical;
+}
+.admin-codes-submit {
+  justify-self: start;
+  margin-top: 2px;
+}
+.admin-codes-search-form {
+  display: flex;
+  gap: 8px;
+  margin-top: 20px;
+}
+.admin-codes-search-form input {
+  flex: 1;
+  min-width: 0;
+}
+.admin-code-details {
+  margin-top: 22px;
+}
+.admin-code-detail-code {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-radius: 10px;
+  padding: 11px 12px;
+  background: #efecff;
+}
+.admin-code-detail-code code,
+.admin-codes-list code {
+  color: #56478f;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.admin-code-details dl {
+  display: grid;
+  gap: 7px;
+  margin: 15px 0;
+}
+.admin-code-details dl div {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid #eeece5;
+  padding-bottom: 7px;
+  font-size: 11px;
+}
+.admin-code-details dt {
+  color: var(--muted);
+}
+.admin-code-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+.admin-code-confirm {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+.admin-code-confirm > span {
+  color: #9b3528;
+  font-size: 11px;
+}
+.admin-codes-empty {
+  margin: 22px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.admin-codes-result {
+  margin: 18px 0 0;
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: #356c43;
+  background: #e9f4e7;
+  font-size: 11px;
+}
+.admin-codes-issued {
+  margin-top: 14px;
+}
+.admin-codes-issued .page-intro {
+  margin-top: 12px;
+}
+.admin-codes-list {
+  display: grid;
+  gap: 7px;
+  margin-top: 15px;
+}
+.admin-codes-list code {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid #e0ddd5;
+  border-radius: 9px;
+  padding: 9px 11px;
+  background: #fffefa;
+}
+.icon-button {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+.icon-button:hover {
+  color: var(--violet);
+  background: #efecff;
+}
+@media (max-width: 820px) {
+  .admin-codes-grid {
+    grid-template-columns: 1fr;
+  }
+  .admin-codes-quota {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
 @media (max-width: 500px) {
   .hero-actions {
     flex-direction: column;

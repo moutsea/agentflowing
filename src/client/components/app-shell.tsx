@@ -5,6 +5,7 @@ import {
   ChevronDown,
   Coins,
   LayoutDashboard,
+  KeyRound,
   LogOut,
   Settings2,
 } from "lucide-react";
@@ -213,6 +214,16 @@ export function AppShell() {
                     >
                       <BarChart3 size={18} />
                       <span>{t("Traffic analytics")}</span>
+                    </NavLink>
+                    <NavLink
+                      to="/app/admin/codes"
+                      aria-label={t("Manage promotional codes")}
+                      className={({ isActive }) =>
+                        isActive ? "sidebar-link active" : "sidebar-link"
+                      }
+                    >
+                      <KeyRound size={18} />
+                      <span>{t("Manage promotional codes")}</span>
                     </NavLink>
                   </>
                 )}

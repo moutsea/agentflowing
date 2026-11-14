@@ -1,0 +1,235 @@
+import { applyD1Migrations, createExecutionContext, env, SELF } from "cloudflare:test";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import { app } from "../src/server";
+
+const migrationFiles = import.meta.glob("../migrations/*.sql", {
+  eager: true,
+  import: "default",
+  query: "?raw",
+}) as Record<string, string>;
+
+const migrations = Object.entries(migrationFiles)
+  .sort(([left], [right]) => left.localeCompare(right))
+  .map(([path, sql]) => ({
+    name: path.split("/").at(-1) ?? path,
+    queries: sql
+      .split("--> statement-breakpoint")
+      .map((query) => query.trim())
+      .filter(Boolean),
+  }));
+
+function adminEnv(userId: string) {
+  return new Proxy(env, {
+    get(target, property) {
+      if (property === "PLATFORM_ADMIN_USER_IDS") return userId;
+      return Reflect.get(target, property);
+    },
+  }) as typeof env;
+}
+
+async function signIn(name = "Admin codes tester") {
+  const suffix = crypto.randomUUID();
+  const response = await SELF.fetch(`${env.APP_URL}/api/auth/sign-up/email`, {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: env.APP_URL },
+    body: JSON.stringify({
+      name,
+      email: `admin-codes-${suffix}@example.com`,
+      password: "correct-horse-battery-staple",
+    }),
+  });
+  expect(response.status).toBe(200);
+  const cookie = response.headers
+    .getSetCookie()
+    .map((value) => value.split(";", 1)[0])
+    .join("; ");
+  const session = await app.fetch(
+    new Request(`${env.APP_URL}/api/session`, { headers: { cookie } }),
+    env,
+    createExecutionContext(),
+  );
+  const body = (await session.json()) as { data: { user: { id: string } } };
+  return { cookie, userId: body.data.user.id };
+}
+
+async function request(path: string, init: RequestInit, requestEnv = env) {
+  return app.fetch(
+    new Request(`${env.APP_URL}${path}`, init),
+    requestEnv,
+    createExecutionContext(),
+  );
+}
+
+function headers(cookie: string, extra: Record<string, string> = {}) {
+  return {
+    cookie,
+    origin: env.APP_URL,
+    ...extra,
+  };
+}
+
+beforeEach(async () => {
+  await applyD1Migrations(env.DB, migrations);
+});
+
+describe("platform admin code management", () => {
+  it("rejects a signed-in workspace user without platform-admin membership", async () => {
+    const user = await signIn("Workspace owner");
+    const response = await request(
+      "/api/admin/redemption-codes/issuance-status",
+      { headers: headers(user.cookie) },
+      env,
+    );
+    expect(response.status).toBe(403);
+    expect(response.headers.get("cache-control")).toContain("no-store");
+    expect(response.headers.get("x-request-id")).toMatch(/^[a-f0-9-]{36}$/);
+  });
+
+  it("issues, queries, revokes, and replays both code types", async () => {
+    const user = await signIn();
+    const requestEnv = adminEnv(user.userId);
+
+    const couponFirst = await request(
+      "/api/admin/coupons",
+      {
+        method: "POST",
+        headers: headers(user.cookie, {
+          "content-type": "application/json",
+          "Idempotency-Key": "admin-coupon-replay",
+        }),
+        body: JSON.stringify({ rate: 20, count: 2, validDays: 7, source: "test" }),
+      },
+      requestEnv,
+    );
+    expect(couponFirst.status).toBe(201);
+    const couponBody = (await couponFirst.json()) as {
+      data: { codes: Array<{ code: string }> };
+    };
+    expect(couponBody.data.codes).toHaveLength(2);
+
+    const couponReplay = await request(
+      "/api/admin/coupons",
+      {
+        method: "POST",
+        headers: headers(user.cookie, {
+          "content-type": "application/json",
+          "Idempotency-Key": "admin-coupon-replay",
+        }),
+        body: JSON.stringify({ rate: 20, count: 2, validDays: 7, source: "test" }),
+      },
+      requestEnv,
+    );
+    expect(couponReplay.status).toBe(201);
+    const couponReplayBody = (await couponReplay.json()) as {
+      data: { codes: Array<{ code: string }> };
+    };
+    expect(couponReplayBody.data.codes).toEqual(couponBody.data.codes);
+
+    const couponCode = couponBody.data.codes[0]!.code;
+    const couponDetails = await request(
+      `/api/admin/coupons/${couponCode.toLowerCase()}`,
+      { headers: headers(user.cookie) },
+      requestEnv,
+    );
+    expect(couponDetails.status).toBe(200);
+    expect(await couponDetails.json()).toMatchObject({
+      data: { code: couponCode, status: "active" },
+    });
+    const couponRevoke = await request(
+      `/api/admin/coupons/${couponCode}`,
+      { method: "DELETE", headers: headers(user.cookie) },
+      requestEnv,
+    );
+    expect(couponRevoke.status).toBe(200);
+    expect(await couponRevoke.json()).toMatchObject({ data: { status: "revoked" } });
+
+    const redemptionFirst = await request(
+      "/api/admin/redemption-codes",
+      {
+        method: "POST",
+        headers: headers(user.cookie, {
+          "content-type": "application/json",
+          "Idempotency-Key": "admin-redemption-replay",
+        }),
+        body: JSON.stringify({ credits: 7, count: 2, validDays: 30, source: "test" }),
+      },
+      requestEnv,
+    );
+    expect(redemptionFirst.status).toBe(201);
+    const redemptionBody = (await redemptionFirst.json()) as {
+      data: { codes: Array<{ code: string; credits: number }> };
+    };
+    expect(redemptionBody.data.codes).toHaveLength(2);
+    expect(redemptionBody.data.codes[0]?.credits).toBe(7);
+
+    const redemptionReplay = await request(
+      "/api/admin/redemption-codes",
+      {
+        method: "POST",
+        headers: headers(user.cookie, {
+          "content-type": "application/json",
+          "Idempotency-Key": "admin-redemption-replay",
+        }),
+        body: JSON.stringify({ credits: 7, count: 2, validDays: 30, source: "test" }),
+      },
+      requestEnv,
+    );
+    expect(redemptionReplay.status).toBe(201);
+    const redemptionReplayBody = (await redemptionReplay.json()) as {
+      data: { codes: Array<{ code: string; credits: number }> };
+    };
+    expect(redemptionReplayBody.data.codes).toEqual(redemptionBody.data.codes);
+
+    const redemptionCode = redemptionBody.data.codes[0]!.code;
+    const issuanceStatus = await request(
+      "/api/admin/redemption-codes/issuance-status",
+      { headers: headers(user.cookie) },
+      requestEnv,
+    );
+    expect(issuanceStatus.status).toBe(200);
+    expect(await issuanceStatus.json()).toMatchObject({
+      data: { creditsIssued: 14, codeCount: 2 },
+    });
+    const redemptionRevoke = await request(
+      `/api/admin/redemption-codes/${redemptionCode}`,
+      { method: "DELETE", headers: headers(user.cookie) },
+      requestEnv,
+    );
+    expect(redemptionRevoke.status).toBe(200);
+    expect(await redemptionRevoke.json()).toMatchObject({ data: { status: "revoked" } });
+  });
+
+  it("writes audit fields without logging the issued codes", async () => {
+    const user = await signIn();
+    const requestEnv = adminEnv(user.userId);
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      const response = await request(
+        "/api/admin/redemption-codes",
+        {
+          method: "POST",
+          headers: headers(user.cookie, {
+            "content-type": "application/json",
+            "Idempotency-Key": "audit-redemption",
+          }),
+          body: JSON.stringify({ credits: 3, count: 1 }),
+        },
+        requestEnv,
+      );
+      expect(response.status).toBe(201);
+      const body = (await response.json()) as { data: { codes: Array<{ code: string }> } };
+      const auditLine = consoleSpy.mock.calls
+        .map(([line]) => String(line))
+        .find((line) => line.includes('"event":"admin_codes.audit"'));
+      expect(auditLine).toBeDefined();
+      expect(auditLine).toContain(user.userId);
+      expect(auditLine).toContain('"action":"redemption_code.issue"');
+      expect(auditLine).toContain('"count":1');
+      expect(auditLine).toContain('"requestId"');
+      expect(auditLine).not.toContain(body.data.codes[0]!.code);
+    } finally {
+      consoleSpy.mockRestore();
+    }
+  });
+});

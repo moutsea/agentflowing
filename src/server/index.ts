@@ -27,6 +27,7 @@ import { chatRoutes } from "./modules/chats/routes";
 import { fileRoutes } from "./modules/files/routes";
 import { externalApiRoutes } from "./modules/external-api/routes";
 import { externalCodesRoutes } from "./modules/external-codes/routes";
+import { adminCodeRoutes } from "./modules/admin-codes/routes";
 import { resolveWorkspace } from "./modules/workspaces/service";
 import { adminNoticeRoutes, noticeRoutes } from "./modules/notices/routes";
 import { workspaceRoutes } from "./modules/workspaces/routes";
@@ -85,6 +86,7 @@ app.route("/api/external", externalCodesRoutes);
 app.route("/api/notices", noticeRoutes);
 app.route("/api/admin/notices", adminNoticeRoutes);
 app.route("/api/admin/analytics", adminAnalyticsRoutes);
+app.route("/api/admin", adminCodeRoutes);
 app.route("/api", workspaceRoutes);
 
 app.all("/agents/*", async (context) => {

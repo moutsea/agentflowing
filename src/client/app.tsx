@@ -14,6 +14,7 @@ import { PricingPage } from "./pages/pricing-page";
 import { NoticesPage } from "./pages/notices-page";
 import { AdminAnalyticsPage } from "./pages/admin-analytics-page";
 import { AdminNoticesPage } from "./pages/admin-notices-page";
+import { AdminCodesPage } from "./pages/admin-codes-page";
 import { SettingsPage } from "./pages/settings-page";
 
 const AgentPage = lazy(async () => ({
@@ -53,6 +54,7 @@ export function App() {
           <Route path="/app/notices" element={<NoticesPage />} />
           <Route path="/app/admin/notices" element={<AdminNoticesPage />} />
           <Route path="/app/admin/analytics" element={<AdminAnalyticsPage />} />
+          <Route path="/app/admin/codes" element={<AdminCodesPage />} />
           <Route path="/app/settings" element={<SettingsPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
