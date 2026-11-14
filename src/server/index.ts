@@ -19,8 +19,10 @@ import { adminAnalyticsRoutes, analyticsRoutes } from "./modules/analytics/route
 import { purgeExpiredAnalytics } from "./modules/analytics/service";
 import { apiKeyRoutes } from "./modules/api-keys/routes";
 import { billingRoutes } from "./modules/billing/routes";
+import { couponRoutes } from "./modules/coupons/routes";
 import { expireStaleDirectQrOrders } from "./modules/billing/direct-qr-service";
 import { reapStaleAgentRuns } from "./modules/billing/service";
+import { redemptionCodeRoutes } from "./modules/redemption-codes/routes";
 import { chatRoutes } from "./modules/chats/routes";
 import { fileRoutes } from "./modules/files/routes";
 import { externalApiRoutes } from "./modules/external-api/routes";
@@ -69,6 +71,8 @@ app.on(["GET", "POST"], "/api/auth/*", (context) => {
 app.route("/api/chats", chatRoutes);
 app.route("/api/agents", agentRoutes);
 app.route("/api/billing", billingRoutes);
+app.route("/api/billing/redemption-codes", redemptionCodeRoutes);
+app.route("/api/billing/coupons", couponRoutes);
 // Page views never reach the Worker (assets serve the SPA), so the beacon is the
 // only writer here. Both analytics routers must be registered before
 // `/api` + workspaceRoutes, whose catch-all `requireAuth` would answer 401 first.

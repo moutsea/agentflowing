@@ -13,6 +13,13 @@ import { creditAccount, creditLedger } from "../../db/schema";
 export type CreditGrantTransaction = {
   before?: readonly D1PreparedStatement[];
   after?: readonly D1PreparedStatement[];
+  /**
+   * Conditional claims normally allow an idempotent replay after a previous
+   * grant committed. Callers that must distinguish a losing claim from a
+   * replay can disable that fallback and handle the replay before starting a
+   * new claim.
+   */
+  allowIdempotentReplay?: boolean;
 };
 
 export type CreditGrantParams = {
@@ -82,18 +89,26 @@ export function createCreditGrantStatement(
  * timestamp keeps `changes()` positive so multiple before statements can each
  * be checked without changing application data.
  */
-function createBeforeGuardStatement(params: CreditGrantParams): D1PreparedStatement {
+function createBeforeGuardStatement(
+  params: CreditGrantParams,
+  allowIdempotentReplay: boolean,
+): D1PreparedStatement {
   return params.env.DB.prepare(
     `UPDATE credit_account
      SET updated_at = CASE
-       WHEN changes() > 0 OR EXISTS (
+       WHEN changes() > 0 OR (? = 1 AND EXISTS (
          SELECT 1 FROM credit_ledger
          WHERE organization_id = ? AND idempotency_key = ?
-       ) THEN updated_at
+       )) THEN updated_at
        ELSE NULL
      END
      WHERE organization_id = ?`,
-  ).bind(params.organizationId, params.idempotencyKey, params.organizationId);
+  ).bind(
+    allowIdempotentReplay ? 1 : 0,
+    params.organizationId,
+    params.idempotencyKey,
+    params.organizationId,
+  );
 }
 
 /**
@@ -106,9 +121,10 @@ export async function grantCredits(params: CreditGrantParams): Promise<CreditGra
   const grant = createCreditGrantStatement(params);
   const before = params.transaction?.before ?? [];
   const after = params.transaction?.after ?? [];
+  const allowIdempotentReplay = params.transaction?.allowIdempotentReplay ?? true;
   const guardedBefore = before.flatMap((statement) => [
     statement,
-    createBeforeGuardStatement(params),
+    createBeforeGuardStatement(params, allowIdempotentReplay),
   ]);
   const results = await params.env.DB.batch([...guardedBefore, grant.statement, ...after]);
   const grantResult = results[guardedBefore.length];
