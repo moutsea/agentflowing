@@ -330,6 +330,10 @@ a UUID, returns it in the response, and writes a structured completion event.
 Agent run lifecycle, refunds, Stripe webhook failures, and rate-limit decisions
 also emit structured JSON. Wrangler enables full log ingestion and 5% trace
 sampling by default; tune sampling for traffic volume and retention cost.
+Global unexpected errors log a fixed error classification, request ID and retryable
+flag, never raw exception messages that can contain SQL parameters. Coupon and
+redemption failures include an irreversible code digest and return stable English
+and Simplified Chinese retry messages.
 
 Stripe events use a five-minute processing lease. Retries can atomically reclaim
 stale events, while recent concurrent deliveries receive a retryable conflict.

@@ -9,7 +9,7 @@ import {
   enforceRateLimit,
   RateLimitExceededError,
 } from "../../middleware/rate-limit";
-import { logEvent } from "../../observability";
+import { codeLogId, logEvent } from "../../observability";
 import type { AppContext } from "../../types";
 import {
   CouponServiceError,
@@ -140,11 +140,6 @@ function couponResponse(row: Awaited<ReturnType<typeof getCouponByCode>>) {
 
 function validationResponse(context: Context<AppContext>) {
   return context.json(INVALID_REQUEST, 400, NO_STORE);
-}
-
-async function codeLogId(code: string) {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(code));
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function logTransientFailure(context: Context<AppContext>, objectId: string) {

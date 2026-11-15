@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { secureHeaders } from "hono/secure-headers";
 import { routeAgentRequest } from "agents";
-import { and, eq } from "drizzle-orm";
+import { and, DrizzleQueryError, eq } from "drizzle-orm";
 
 import { MonetizedAgent } from "./agents/monetized-agent";
 import { createAuth, getAuthCapabilities } from "./auth";
@@ -32,7 +32,7 @@ import { resolveWorkspace } from "./modules/workspaces/service";
 import { adminNoticeRoutes, noticeRoutes } from "./modules/notices/routes";
 import { workspaceRoutes } from "./modules/workspaces/routes";
 import type { AppContext } from "./types";
-import { logEvent, requestLogPath } from "./observability";
+import { codeLogId, logEvent, requestLogPath } from "./observability";
 
 export { MonetizedAgent };
 
@@ -144,7 +144,7 @@ app.all("/agents/*", async (context) => {
 
 app.notFound((context) => context.json({ error: "Not found" }, 404));
 
-app.onError((error, context) => {
+app.onError(async (error, context) => {
   if (error instanceof HTTPException && error.status < 500) {
     return context.json({ error: "invalid_request", message: error.message }, error.status);
   }
@@ -152,13 +152,28 @@ app.onError((error, context) => {
     context.header("retry-after", String(error.retryAfterSeconds));
     return context.json({ error: "rate_limited", message: error.message, scope: error.scope }, 429);
   }
+  const input = /^\/api\/billing\/(?:coupons|redemption-codes)(?:\/|$)/.test(context.req.path)
+    ? await context.req.json<{ code?: unknown }>().catch(() => null)
+    : null;
   logEvent("error", "request.failed", {
     requestId: context.var.requestId,
     method: context.req.method,
     path: requestLogPath(context.req.path),
-    message: error.message,
+    error: error instanceof DrizzleQueryError ? "database_error" : "internal_error",
+    objectId: typeof input?.code === "string" ? await codeLogId(input.code) : undefined,
+    retryable: true,
   });
-  return context.json({ error: "Internal server error" }, 500);
+  return context.json(
+    {
+      error: "internal_error",
+      message: "A temporary server error occurred. Please retry.",
+      messages: {
+        en: "A temporary server error occurred. Please retry.",
+        "zh-CN": "服务器暂时不可用，请稍后重试。",
+      },
+    },
+    500,
+  );
 });
 
 export default {

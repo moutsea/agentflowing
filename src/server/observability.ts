@@ -8,6 +8,11 @@ export function requestLogPath(path: string) {
   );
 }
 
+export async function codeLogId(code: string) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(code));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 export function logEvent(level: LogLevel, event: string, fields: Record<string, LogValue> = {}) {
   const payload = JSON.stringify({
     timestamp: new Date().toISOString(),
