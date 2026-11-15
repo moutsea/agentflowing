@@ -32,7 +32,7 @@ import { resolveWorkspace } from "./modules/workspaces/service";
 import { adminNoticeRoutes, noticeRoutes } from "./modules/notices/routes";
 import { workspaceRoutes } from "./modules/workspaces/routes";
 import type { AppContext } from "./types";
-import { logEvent } from "./observability";
+import { logEvent, requestLogPath } from "./observability";
 
 export { MonetizedAgent };
 
@@ -155,7 +155,7 @@ app.onError((error, context) => {
   logEvent("error", "request.failed", {
     requestId: context.var.requestId,
     method: context.req.method,
-    path: context.req.path,
+    path: requestLogPath(context.req.path),
     message: error.message,
   });
   return context.json({ error: "Internal server error" }, 500);

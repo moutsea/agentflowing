@@ -141,6 +141,11 @@ function validationResponse(context: Context<AppContext>) {
   return context.json(INVALID_REQUEST, 400, NO_STORE);
 }
 
+async function codeLogId(code: string) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(code));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 function logTransientFailure(context: Context<AppContext>, objectId: string) {
   logEvent("error", "external_codes.request_failed", {
     requestId: context.var.requestId,
@@ -267,7 +272,7 @@ redemptionRoutes.get("/:code", async (context) => {
     }
     return context.json(redemptionCodeResponse(row), 200, NO_STORE);
   } catch (error) {
-    return redemptionErrorResponse(context, error, normalized);
+    return redemptionErrorResponse(context, error, await codeLogId(normalized));
   }
 });
 
@@ -279,7 +284,7 @@ redemptionRoutes.delete("/:code", async (context) => {
     const row = await revokeRedemptionCode(context.env, normalized);
     return context.json(redemptionCodeResponse(row), 200, NO_STORE);
   } catch (error) {
-    return redemptionErrorResponse(context, error, normalized);
+    return redemptionErrorResponse(context, error, await codeLogId(normalized));
   }
 });
 
@@ -309,7 +314,7 @@ couponRoutes.get("/:code", async (context) => {
     }
     return context.json(couponResponse(row), 200, NO_STORE);
   } catch (error) {
-    return couponErrorResponse(context, error, normalized);
+    return couponErrorResponse(context, error, await codeLogId(normalized));
   }
 });
 
@@ -321,7 +326,7 @@ couponRoutes.delete("/:code", async (context) => {
     const row = await revokeCoupon(context.env, normalized);
     return context.json(couponResponse(row), 200, NO_STORE);
   } catch (error) {
-    return couponErrorResponse(context, error, normalized);
+    return couponErrorResponse(context, error, await codeLogId(normalized));
   }
 });
 

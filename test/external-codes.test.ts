@@ -1,5 +1,5 @@
 import { applyD1Migrations, createExecutionContext, env } from "cloudflare:test";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { app } from "../src/server";
 import { issueCoupon } from "../src/server/modules/coupons/service";
@@ -124,6 +124,25 @@ describe("external redemption-code API", () => {
     expect(unmatchedPath.status).toBe(404);
     expect(unmatchedPath.headers.get("cache-control")).toBe("no-store");
     expect(unmatchedPath.headers.get("x-request-id")).toMatch(/^[a-f0-9-]{36}$/);
+  });
+
+  it("never logs full credentials on successful or failed code lookup", async () => {
+    const coupon = await issueCoupon({ env, rate: 20 });
+    const info = vi.spyOn(console, "log").mockImplementation(() => {});
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const path = `/api/external/coupons/${coupon.code}`;
+      expect((await request(path, { headers: tokenHeaders(couponToken) })).status).toBe(200);
+      const brokenDb = { prepare: () => { throw new Error("database unavailable"); } };
+      expect((await request(path, { headers: tokenHeaders(couponToken) }, configuredEnv({ DB: brokenDb }))).status).toBe(500);
+      const logs = JSON.stringify([...info.mock.calls, ...errors.mock.calls]);
+      expect(logs).toContain("request.completed");
+      expect(logs).toContain("external_codes.request_failed");
+      expect(logs).not.toContain(coupon.code);
+    } finally {
+      info.mockRestore();
+      errors.mockRestore();
+    }
   });
 
   it("issues at most 100, replays idempotently, and exposes issuance status", async () => {
