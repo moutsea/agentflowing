@@ -30,6 +30,7 @@ export type DirectQrDialogProps = {
   planName: string;
   credits: number;
   methods: QrPaymentMethod[];
+  couponCode?: string;
   /** Close the dialog; cancellation on dismissal is best effort. */
   onClose: () => void;
   /** Switch to a recurring subscription after canceling the one-time payment. */
@@ -72,6 +73,7 @@ export function DirectQrDialog({
   planName,
   credits,
   methods,
+  couponCode,
   onClose,
   onFallbackToCheckout,
   onPaid,
@@ -89,7 +91,7 @@ export function DirectQrDialog({
   // The outcome of one request, tagged with the wallet/attempt it belongs to.
   // A request whose key no longer matches is still loading by definition, so
   // switching wallet shows the spinner without setting state in an effect.
-  const requestKey = `${planId}:${method ?? "none"}:${attempt}`;
+  const requestKey = `${planId}:${method ?? "none"}:${couponCode ?? ""}:${attempt}`;
   const [result, setResult] = useState<{ key: string; phase: Phase } | null>(null);
   const phase: Phase = result?.key === requestKey ? result.phase : { name: "loading" };
   const setPhase = useCallback(
@@ -136,7 +138,7 @@ export function DirectQrDialog({
         ? previous.request
         : apiRequest<{ data: DirectQrPayment }>("/api/billing/qr", {
             method: "POST",
-            body: JSON.stringify({ planId, method } satisfies DirectQrCreateRequest),
+            body: JSON.stringify({ planId, method, ...(couponCode ? { couponCode } : {}) } satisfies DirectQrCreateRequest),
           }).then(({ data }) => data);
     if (!previous || previous.key !== key) createdRef.current = { key, request };
 
@@ -164,7 +166,7 @@ export function DirectQrDialog({
       aliveRef.current = false;
       void releaseActiveIntent();
     };
-  }, [open, method, planId, releaseActiveIntent, requestKey, setPhase]);
+  }, [open, method, planId, couponCode, releaseActiveIntent, requestKey, setPhase]);
 
   // A hidden page may return from bfcache without remounting. Keep the intent
   // identity even if this best-effort cancellation fails; pageshow rechecks it.

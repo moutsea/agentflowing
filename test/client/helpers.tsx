@@ -3,6 +3,13 @@ import { createRoot } from "react-dom/client";
 
 Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
 
+export type TestRoot = {
+  container: HTMLDivElement;
+  render: (node: ReactNode) => Promise<void>;
+  unmount: () => Promise<void>;
+  button: (label: string) => HTMLButtonElement;
+};
+
 export function createTestRoot() {
   const container = document.createElement("div");
   document.body.appendChild(container);

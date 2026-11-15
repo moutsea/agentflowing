@@ -5,6 +5,9 @@ const LANGUAGE_STORAGE_KEY = "agentflowing-language";
 
 const adminCodesEn = {
   "Manage promotional codes": "Manage promotional codes",
+  "Coupon code": "Coupon code",
+  "Redemption code": "Redemption code",
+  "Redeem code": "Redeem code",
   "Platform administrator access is required": "Platform administrator access is required",
   "Issue, search, and revoke platform codes.": "Issue, search, and revoke platform codes.",
   Coupons: "Coupons",
@@ -90,6 +93,9 @@ const adminCodesEn = {
 const zhCN = {
   ...adminCodesEn,
   "Manage promotional codes": "营销代码管理",
+  "Coupon code": "优惠券代码",
+  "Redemption code": "兑换码",
+  "Redeem code": "兑换",
   "Platform administrator access is required": "仅平台管理员可访问",
   "Issue, search, and revoke platform codes.": "发行、查询和撤销平台代码。",
   Coupons: "优惠券",
