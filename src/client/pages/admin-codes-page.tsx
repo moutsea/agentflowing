@@ -1,5 +1,5 @@
 import { Check, Clipboard, KeyRound, RefreshCw, Search, Ticket, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 
 import { apiRequest, ApiError } from "../lib/api";
@@ -45,20 +45,23 @@ type IssueResponse = {
 const emptyCoupon = { rate: 20, count: 1, validDays: 7, note: "", source: "admin" };
 const emptyRedemption = { credits: 5, count: 1, validDays: 30, note: "", source: "admin" };
 
-function storedIssuanceKey(name: string) {
+type PendingIssuance<T> = { key: string; form: T };
+
+function storedIssuance<T>(name: string): PendingIssuance<T> | null {
   try {
-    return window.sessionStorage.getItem(name);
+    const stored = window.sessionStorage.getItem(name);
+    return stored ? JSON.parse(stored) : null;
   } catch {
     return null;
   }
 }
 
-function saveIssuanceKey(name: string, key: string | null) {
+function saveIssuance<T>(name: string, request: PendingIssuance<T> | null) {
   try {
-    if (key) window.sessionStorage.setItem(name, key);
+    if (request) window.sessionStorage.setItem(name, JSON.stringify(request));
     else window.sessionStorage.removeItem(name);
   } catch {
-    // The in-memory ref still protects double clicks when storage is blocked.
+    // The current page still retains the original request when storage is blocked.
   }
 }
 
@@ -124,8 +127,10 @@ export function AdminCodesPage() {
 function AdminCodesManager() {
   const { t, i18n } = useTranslation();
   const [kind, setKind] = useState<CodeKind>("coupon");
-  const [couponForm, setCouponForm] = useState(emptyCoupon);
-  const [redemptionForm, setRedemptionForm] = useState(emptyRedemption);
+  const [couponPending, setCouponPending] = useState(() => storedIssuance<typeof emptyCoupon>("admin-coupon-issuance-request"));
+  const [redemptionPending, setRedemptionPending] = useState(() => storedIssuance<typeof emptyRedemption>("admin-redemption-issuance-request"));
+  const [couponForm, setCouponForm] = useState(couponPending?.form ?? emptyCoupon);
+  const [redemptionForm, setRedemptionForm] = useState(redemptionPending?.form ?? emptyRedemption);
   const [issuanceStatus, setIssuanceStatus] = useState<IssuanceStatus | null>(null);
   const [details, setDetails] = useState<CodeDetails | null>(null);
   const [search, setSearch] = useState("");
@@ -135,10 +140,7 @@ function AdminCodesManager() {
   const [result, setResult] = useState<string[]>([]);
   const [notice, setNotice] = useState("");
   const [confirmRevoke, setConfirmRevoke] = useState(false);
-  const couponKeyRef = useRef<string | null>(storedIssuanceKey("admin-coupon-issuance-key"));
-  const redemptionKeyRef = useRef<string | null>(
-    storedIssuanceKey("admin-redemption-issuance-key"),
-  );
+  const pending = kind === "coupon" ? couponPending : redemptionPending;
 
   const loadIssuanceStatus = useCallback(async () => {
     setLoadingStatus(true);
@@ -167,23 +169,18 @@ function AdminCodesManager() {
     setDetails(null);
     try {
       const isCoupon = kind === "coupon";
-      const keyRef = isCoupon ? couponKeyRef : redemptionKeyRef;
-      const storageKey = isCoupon ? "admin-coupon-issuance-key" : "admin-redemption-issuance-key";
-      const key = keyRef.current ?? crypto.randomUUID();
-      keyRef.current = key;
-      saveIssuanceKey(storageKey, key);
-      const payload = isCoupon
-        ? {
-            ...couponForm,
-            note: couponForm.note || undefined,
-            source: couponForm.source || undefined,
-          }
-        : {
-            ...redemptionForm,
-            note: redemptionForm.note || undefined,
-            source: redemptionForm.source || undefined,
-            idempotencyKey: key,
-          };
+      const storageKey = isCoupon ? "admin-coupon-issuance-request" : "admin-redemption-issuance-request";
+      const original = pending ?? {
+        key: crypto.randomUUID(),
+        form: isCoupon
+          ? { ...couponForm, note: couponForm.note.trim(), source: couponForm.source.trim() || "admin" }
+          : { ...redemptionForm, note: redemptionForm.note.trim(), source: redemptionForm.source.trim() || "admin" },
+      };
+      if (isCoupon) setCouponPending(original as PendingIssuance<typeof emptyCoupon>);
+      else setRedemptionPending(original as PendingIssuance<typeof emptyRedemption>);
+      saveIssuance(storageKey, original);
+      const key = original.key;
+      const payload = { ...original.form, ...(!isCoupon ? { idempotencyKey: key } : {}) };
       const response = await apiRequest<IssueResponse>(
         `/api/admin/${isCoupon ? "coupons" : "redemption-codes"}`,
         {
@@ -194,8 +191,9 @@ function AdminCodesManager() {
       );
       setResult(response.data.codes.map((item) => item.code));
       setNotice(t("Codes issued successfully"));
-      keyRef.current = null;
-      saveIssuanceKey(storageKey, null);
+      if (isCoupon) setCouponPending(null);
+      else setRedemptionPending(null);
+      saveIssuance(storageKey, null);
       if (!isCoupon) await loadIssuanceStatus();
     } catch (caught) {
       setError(localizedRequestError(caught, t, i18n.resolvedLanguage));
@@ -355,7 +353,7 @@ function AdminCodesManager() {
               <h2>{t(kind === "coupon" ? "Issue coupons" : "Issue redemption codes")}</h2>
             </div>
           </div>
-          <fieldset disabled={Boolean(busy)}>
+          <fieldset disabled={Boolean(busy) || Boolean(pending)}>
             <div className="field-grid two-columns">
               {kind === "coupon" ? (
                 <label>
@@ -444,14 +442,14 @@ function AdminCodesManager() {
                 }
               />
             </label>
+          </fieldset>
             <button
               className="button button-dark admin-codes-submit"
               type="submit"
               disabled={Boolean(busy)}
             >
-              {busy === "issue" ? t("Issuing…") : t("Issue codes")}
+              {busy === "issue" ? t("Issuing…") : pending ? t("Recover original issuance") : t("Issue codes")}
             </button>
-          </fieldset>
         </form>
 
         <section className="panel admin-codes-search">
