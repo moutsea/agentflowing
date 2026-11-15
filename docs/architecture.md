@@ -163,12 +163,17 @@ response carries it on every plan, so the label is right on first paint and does
 not wait for a second request — which keeps the number on the card, the number
 in the dialog, and the amount Stripe charges a single number rather than three.
 
-Two failure modes are handled explicitly, because a PaymentIntent is real money
-from the moment it is confirmed. If Stripe returns no code for an intent that has
-already settled, the intent is fulfilled and the caller gets `409 already_paid`
-rather than a cancellation that would refund a paid order. If confirming fails
-for any other reason, the intent is cancelled and the `order` row is failed in
-the same request, so nothing payable is left dangling.
+If Stripe returns no code for an intent that has already settled, the intent is
+fulfilled and the caller gets `409 already_paid`, not a cancellation. A definitive
+create rejection without a PaymentIntent atomically fails the order and releases
+its coupon. Network errors and server errors are unknown outcomes, not proof that
+no payment exists. Before contacting Stripe, `order.provider_create_params` stores
+the exact request; the recovery sweep can replay it with the original order-derived
+idempotency key for up to 24 hours, then cancel the recovered intent or settle it.
+An empty search never releases a reservation. After the idempotency retention
+window, unresolved orders remain reserved for metadata/webhook reconciliation;
+they are not recreated with a potentially expired key. See [Stripe's retry and
+idempotency contract](https://docs.stripe.com/error-low-level#post-requests).
 
 PaymentIntents do not expire on their own, so the scheduled handler runs
 `expireStaleDirectQrOrders`: after `DIRECT_QR_ORDER_STALE_SECONDS` (thirty minutes

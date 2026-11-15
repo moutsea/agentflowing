@@ -110,6 +110,22 @@ function stripeErrorCode(error: unknown) {
   return typeof code === "string" ? code : null;
 }
 
+function rejectedDirectQrCreate(error: unknown) {
+  if (typeof error !== "object" || error === null) return false;
+  const headers = Reflect.get(error, "headers");
+  return (
+    Reflect.get(error, "type") === "StripeInvalidRequestError" &&
+    Reflect.get(error, "statusCode") === 400 &&
+    !Reflect.get(error, "payment_intent") &&
+    stripeErrorCode(error) !== "idempotency_key_in_use" &&
+    !(
+      typeof headers === "object" &&
+      headers !== null &&
+      Reflect.get(headers, "stripe-should-retry") === "true"
+    )
+  );
+}
+
 function notFound() {
   return new DirectQrError("not_found", "QR payment was not found", 404);
 }
@@ -592,6 +608,7 @@ export async function createDirectQrCheckout(params: {
   // and so a settled payment is never cancelled or marked failed.
   let intentId: string | null = null;
   let stripeCreateAttempted = false;
+  let creationRejected = false;
   let settled = false;
 
   try {
@@ -631,10 +648,24 @@ export async function createDirectQrCheckout(params: {
       intentParams.payment_method_options = { wechat_pay: { client: "web" } };
     }
 
+    // Save the exact request before contacting Stripe: a lost response must be
+    // replayed with the same parameters and key, not inferred from search lag.
+    await params.env.DB.prepare(
+      `UPDATE "order" SET provider_create_params = ?, updatedAt = unixepoch() WHERE id = ?`,
+    )
+      .bind(JSON.stringify(intentParams), orderId)
+      .run();
+
     stripeCreateAttempted = true;
-    const intent = await stripe.paymentIntents.create(intentParams, {
-      idempotencyKey: `agentflowing-direct-qr:${orderId}`,
-    });
+    let intent: Stripe.PaymentIntent;
+    try {
+      intent = await stripe.paymentIntents.create(intentParams, {
+        idempotencyKey: `agentflowing-direct-qr:${orderId}`,
+      });
+    } catch (error) {
+      creationRejected = rejectedDirectQrCreate(error);
+      throw error;
+    }
     intentId = intent.id;
 
     // Write the association as soon as Stripe accepts the intent. If the D1
@@ -695,7 +726,7 @@ export async function createDirectQrCheckout(params: {
     // If the create request itself timed out, Stripe may have accepted it even
     // though no id reached us. Leave the reservation for metadata-based sweep
     // recovery instead of releasing it on an unconfirmed outcome.
-    let canRelease = !intentId && !stripeCreateAttempted;
+    let canRelease = !intentId && (!stripeCreateAttempted || creationRejected);
     let confirmedFailure = false;
     if (intentId && !settled) {
       const canceled = await cancelQuietly(stripe, intentId);
@@ -918,6 +949,10 @@ const STALE_DIRECT_QR_ORDER_BATCH = 25;
  */
 export type SweepStripe = {
   paymentIntents: {
+    create?(
+      params: Stripe.PaymentIntentCreateParams,
+      options: { idempotencyKey: string },
+    ): Promise<Stripe.PaymentIntent>;
     cancel(paymentIntentId: string): Promise<unknown>;
     retrieve(paymentIntentId: string): Promise<Stripe.PaymentIntent>;
     search?(params: { query: string; limit?: number }): Promise<{ data: Stripe.PaymentIntent[] }>;
@@ -1022,24 +1057,43 @@ async function sweepDirectQrOrder(
   // by the order metadata before deciding anything about the reservation; an
   // unknown Stripe state must remain retryable rather than being failed away.
   if (!candidate.paymentIntentId) {
-    if (!stripe.paymentIntents.search) return "skipped";
-    let matches: { data: Stripe.PaymentIntent[] };
+    let matches: { data: Stripe.PaymentIntent[] } = { data: [] };
     try {
-      matches = await stripe.paymentIntents.search({
-        query: `metadata['orderId']:'${candidate.id}'`,
-        limit: 1,
-      });
+      matches =
+        (await stripe.paymentIntents.search?.({
+          query: `metadata['orderId']:'${candidate.id}'`,
+          limit: 1,
+        })) ?? matches;
     } catch (error) {
       logEvent("warn", "billing.direct_qr_expire_search_failed", {
         orderId: candidate.id,
         message: errorMessage(error),
       });
-      return "skipped";
     }
-    const intent = matches.data.find(
+    let intent = matches.data.find(
       (item) => metadataValue(item.metadata, "orderId") === candidate.id,
     );
-    // Search is eventually consistent; an empty result cannot prove non-payment.
+    // Empty search is not proof of non-payment. Recover the original request
+    // only inside Stripe's guaranteed 24-hour idempotency retention window.
+    if (!intent && stripe.paymentIntents.create) {
+      const original = await env.DB.prepare(
+        `SELECT provider_create_params AS params FROM "order"
+         WHERE id = ? AND createdAt > unixepoch() - 86400`,
+      )
+        .bind(candidate.id)
+        .first<{ params: string | null }>();
+      if (original?.params) {
+        try {
+          intent = await stripe.paymentIntents.create(JSON.parse(original.params), {
+            idempotencyKey: `agentflowing-direct-qr:${candidate.id}`,
+          });
+        } catch (error) {
+          if (!rejectedDirectQrCreate(error)) throw error;
+          await failDirectQrOrderById(env, candidate.id, true);
+          return "failed";
+        }
+      }
+    }
     if (!intent) return "skipped";
     await env.DB.prepare(
       `UPDATE "order" SET provider_session_id = ?, updatedAt = unixepoch()

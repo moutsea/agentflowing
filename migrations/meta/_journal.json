@@ -92,6 +92,13 @@
       "when": 1794706581826,
       "tag": "0012_legacy_coupon_issuance_backfill",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1794738613061,
+      "tag": "0013_direct_qr_create_recovery",
+      "breakpoints": true
     }
   ]
 }

@@ -23,6 +23,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - T7/R5: connect user coupon preview/QR checkout and redemption preview/claim with workspace balance refresh.
 - T7/R7: persist issuance keys together with normalized parameters and provide explicit original-request recovery after refresh.
 - T7/N3: keep SQL-bound credentials out of global failure logs; return bilingual retryable errors with request IDs and credential digests.
+- T7/N1: release definitively rejected Stripe creates and persist exact requests for bounded idempotent recovery before cancellation or settlement.
 
 ## [0.1.0] - 2026-08-07
 

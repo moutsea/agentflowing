@@ -404,6 +404,7 @@ export const order = sqliteTable(
       .references(() => organization.id, { onDelete: "cascade" }),
     provider: text("provider").notNull(),
     providerSessionId: text("provider_session_id"),
+    providerCreateParams: text("provider_create_params"),
     kind: text("kind", { enum: ["subscription", "credit_pack"] }).notNull(),
     planId: text("plan_id").notNull(),
     amount: integer("amount").notNull(),

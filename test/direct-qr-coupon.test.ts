@@ -618,6 +618,134 @@ describe("direct QR coupon checkout", () => {
     ).toEqual({ count: 1 });
   });
 
+  it("releases a coupon when Stripe definitively rejects creation without an intent", async () => {
+    const workspace = await seedWorkspace();
+    const coupon = await issueCoupon({ env, rate: 20 });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json(
+          {
+            error: {
+              type: "invalid_request_error",
+              code: "payment_method_unactivated",
+              message: "Payment method is not activated.",
+            },
+          },
+          { status: 400 },
+        ),
+      ),
+    );
+    await expect(
+      createDirectQrCheckout({
+        env: configuredEnv(),
+        ...workspace,
+        userEmail: "payer@example.com",
+        planId: "pro",
+        method: "wechat_pay",
+        appUrl: env.APP_URL,
+        couponCode: coupon.code,
+      }),
+    ).rejects.toThrow("Payment method is not activated.");
+    const order = await env.DB.prepare(`SELECT id FROM "order" WHERE coupon_id = ?`)
+      .bind(coupon.id)
+      .first<{ id: string }>();
+    expect(await orderRow(order!.id)).toMatchObject({ status: "failed", paymentIntentId: null });
+    expect(await couponRow(coupon.id)).toMatchObject({ status: "active", reservationId: null });
+    expect(await balance(workspace.organizationId)).toBe(0);
+  });
+
+  it.each(["requires_action", "succeeded"] as const)(
+    "replays an unknown create with the original request/key before resolving %s",
+    async (status) => {
+      const stripe = stripeFetchMock();
+      const workspace = await seedWorkspace();
+      const coupon = await issueCoupon({ env, rate: 20 });
+      let originalBody = "";
+      let originalKey: string | null = null;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn<typeof fetch>(async (input, init) => {
+          const request = input instanceof Request ? input : new Request(input, init);
+          originalBody = await request.clone().text();
+          originalKey = request.headers.get("Idempotency-Key");
+          return Response.json(
+            { error: { type: "api_error", message: "response lost" } },
+            { status: 500, headers: { "Stripe-Should-Retry": "false" } },
+          );
+        }),
+      );
+      await expect(
+        createDirectQrCheckout({
+          env: configuredEnv(),
+          ...workspace,
+          userEmail: "payer@example.com",
+          planId: "pro",
+          method: "wechat_pay",
+          appUrl: env.APP_URL,
+          couponCode: coupon.code,
+        }),
+      ).rejects.toThrow("response lost");
+      const order = await env.DB.prepare(`SELECT id FROM "order" WHERE coupon_id = ?`)
+        .bind(coupon.id)
+        .first<{ id: string }>();
+      await env.DB.prepare(`UPDATE "order" SET createdAt = unixepoch() - 7200 WHERE id = ?`)
+        .bind(order!.id)
+        .run();
+      expect(await couponRow(coupon.id)).toMatchObject({ status: "reserved" });
+      const accepted = (await (
+        await stripe.fetchStripe("https://api.stripe.com/v1/payment_intents", {
+          method: "POST",
+          body: originalBody,
+        })
+      ).json()) as Stripe.PaymentIntent;
+      const current = {
+        ...accepted,
+        status,
+        amount_received: status === "succeeded" ? accepted.amount : 0,
+      } as Stripe.PaymentIntent;
+      const create = vi.fn(
+        async (params: Stripe.PaymentIntentCreateParams, options: { idempotencyKey: string }) => {
+          expect(options.idempotencyKey).toBe(originalKey);
+          expect(params).toMatchObject({
+            amount: accepted.amount,
+            metadata: accepted.metadata,
+            return_url: `${env.APP_URL}/pricing?checkout=qr-return`,
+          });
+          return current;
+        },
+      );
+      const cancel = vi.fn(async () => ({ status: "canceled" }));
+      const recoveryStripe = {
+        paymentIntents: {
+          create,
+          cancel,
+          search: async () => ({ data: [] }),
+          retrieve: async () => current,
+        },
+      };
+      await env.DB.prepare(`UPDATE "order" SET createdAt = unixepoch() - 86401 WHERE id = ?`)
+        .bind(order!.id)
+        .run();
+      await expireStaleDirectQrOrders({ env: configuredEnv(), stripe: recoveryStripe });
+      expect(create).not.toHaveBeenCalled();
+      expect(await couponRow(coupon.id)).toMatchObject({ status: "reserved" });
+      await env.DB.prepare(`UPDATE "order" SET createdAt = unixepoch() - 7200 WHERE id = ?`)
+        .bind(order!.id)
+        .run();
+      await expireStaleDirectQrOrders({ env: configuredEnv(), stripe: recoveryStripe });
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(await couponRow(coupon.id)).toMatchObject({
+        status: status === "succeeded" ? "used" : "active",
+      });
+      expect(await orderRow(order!.id)).toMatchObject({
+        status: status === "succeeded" ? "paid" : "failed",
+      });
+      expect(await balance(workspace.organizationId)).toBe(status === "succeeded" ? 5000 : 0);
+      expect(cancel).toHaveBeenCalledTimes(status === "succeeded" ? 0 : 1);
+    },
+  );
+
   it("recovers a succeeded payment when provider-session persistence was lost", async () => {
     const stripe = stripeFetchMock();
     const workspace = await seedWorkspace();
