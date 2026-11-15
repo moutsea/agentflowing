@@ -122,6 +122,20 @@ class AdminIdempotencyConflictError extends Error {
   }
 }
 
+class AdminIdempotencyRecoveryConflictError extends Error {
+  readonly status = 409 as const;
+  readonly reason = "idempotency_recovery_conflict" as const;
+  readonly messages = {
+    en: "The Idempotency-Key matches coupon rows that require manual recovery.",
+    "zh-CN": "Idempotency-Key 对应的优惠券批次无法唯一确认，请人工核对。",
+  } as const;
+
+  constructor() {
+    super("The Idempotency-Key matches coupon rows that require manual recovery.");
+    this.name = "AdminIdempotencyRecoveryConflictError";
+  }
+}
+
 type CouponBatch = Awaited<ReturnType<typeof issueCoupons>>;
 type CouponReplay = {
   fingerprint: string;
@@ -287,7 +301,13 @@ async function recoverCouponBatch(
     .all<Record<string, unknown>>();
 
   const expectedCount = input.count ?? 1;
-  if (rows.results.length < expectedCount) return null;
+  if (rows.results.length > 0 && rows.results.length < expectedCount) {
+    throw new AdminIdempotencyRecoveryConflictError();
+  }
+
+  if (rows.results.length === 0) {
+    return recoverLegacyCouponBatch(env, actorUserId, key, fingerprint, record, input);
+  }
 
   const batch = recoveredCouponBatch(rows.results.slice(0, expectedCount), input);
   const serialized = serializeCouponBatch(batch);
@@ -299,6 +319,149 @@ async function recoverCouponBatch(
     .bind(serialized, Math.floor(Date.now() / 1000), record.id, fingerprint)
     .run();
   if (completed.meta.changes === 1) return deserializeCouponBatch(serialized);
+
+  const latest = await readCouponIdempotency(env, actorUserId, key);
+  if (latest?.status === "completed" && latest.batch) {
+    return deserializeCouponBatch(latest.batch);
+  }
+  return null;
+}
+
+/**
+ * Before 0011, a crash could leave coupon rows committed without the durable
+ * issuance foreign key. Only a narrow timestamp match is considered here;
+ * any non-empty result that is not exactly one complete batch is rejected so
+ * an expired lease can never silently create a second batch.
+ */
+async function recoverLegacyCouponBatch(
+  env: Env,
+  actorUserId: string,
+  key: string,
+  fingerprint: string,
+  record: CouponIdempotencyRecord,
+  input: Parameters<typeof issueCoupons>[0],
+) {
+  const note = typeof input.note === "string" ? input.note.trim() || null : (input.note ?? null);
+  const source = typeof input.source === "string" ? input.source.trim() || "admin" : "admin";
+  const expectedCount = input.count ?? 1;
+  const validDays = input.validDays ?? 7;
+  const notePredicate = note === null ? "note IS NULL" : "note = ?";
+  const lowerCreatedAt = record.createdAt - 2;
+  const upperCreatedAt = record.createdAt + 2;
+  const bindings: unknown[] = [
+    actorUserId,
+    input.rate * 100,
+    source,
+    lowerCreatedAt,
+    upperCreatedAt,
+    validDays * 86_400,
+  ];
+  if (note !== null) bindings.splice(3, 0, note);
+  const rows = await env.DB.prepare(
+    `SELECT id, code, discount_rate_bps AS discountRateBps, status,
+            expires_at AS expiresAt, reservation_id AS reservationId,
+            reserved_by_user_id AS reservedByUserId,
+            reserved_organization_id AS reservedOrganizationId,
+            reserved_at AS reservedAt,
+            reservation_expires_at AS reservationExpiresAt,
+            redeemed_by_user_id AS redeemedByUserId,
+            redeemed_organization_id AS redeemedOrganizationId,
+            redeemed_at AS redeemedAt, revoked_at AS revokedAt,
+            note, source, created_by AS createdBy,
+            admin_issuance_id AS adminIssuanceId, createdAt, updatedAt
+       FROM coupon
+      WHERE admin_issuance_id IS NULL
+        AND created_by = ?
+        AND discount_rate_bps = ?
+        AND source = ?
+        AND ${notePredicate}
+        AND createdAt BETWEEN ? AND ?
+        AND expires_at = createdAt + ?
+      ORDER BY createdAt ASC, id ASC`,
+  )
+    .bind(...bindings)
+    .all<Record<string, unknown>>();
+
+  if (rows.results.length === 0) return null;
+  const matchingCouponCount = await env.DB.prepare(
+    `SELECT COUNT(*) AS count
+       FROM coupon
+      WHERE created_by = ?
+        AND discount_rate_bps = ?
+        AND source = ?
+        AND ${notePredicate}
+        AND createdAt BETWEEN ? AND ?
+        AND expires_at = createdAt + ?`,
+  )
+    .bind(...bindings)
+    .first<{ count: number }>();
+  if (matchingCouponCount?.count !== expectedCount) {
+    throw new AdminIdempotencyRecoveryConflictError();
+  }
+
+  const issuanceNotePredicate =
+    note === null
+      ? "json_extract(request_fingerprint, '$.note') IS NULL"
+      : "json_extract(request_fingerprint, '$.note') = ?";
+  const issuanceBindings: unknown[] = [
+    actorUserId,
+    lowerCreatedAt,
+    upperCreatedAt,
+    input.rate,
+    expectedCount,
+    validDays,
+    source,
+  ];
+  if (note !== null) issuanceBindings.push(note);
+  const pendingIssuances = await env.DB.prepare(
+    `SELECT COUNT(*) AS count
+       FROM admin_coupon_issuance
+      WHERE status = 'pending'
+        AND json_valid(request_fingerprint)
+        AND actor_user_id = ?
+        AND created_at BETWEEN ? AND ?
+        AND COALESCE(json_extract(request_fingerprint, '$.rate'), 0) = ?
+        AND COALESCE(json_extract(request_fingerprint, '$.count'), 1) = ?
+        AND COALESCE(json_extract(request_fingerprint, '$.validDays'), 7) = ?
+        AND COALESCE(json_extract(request_fingerprint, '$.source'), 'admin') = ?
+        AND ${issuanceNotePredicate}`,
+  )
+    .bind(...issuanceBindings)
+    .first<{ count: number }>();
+  if (pendingIssuances?.count !== 1) {
+    throw new AdminIdempotencyRecoveryConflictError();
+  }
+
+  const createdAt = Number(rows.results[0]?.createdAt);
+  const isOneTimestampBatch = rows.results.every((row) => Number(row.createdAt) === createdAt);
+  if (!isOneTimestampBatch || rows.results.length !== expectedCount) {
+    throw new AdminIdempotencyRecoveryConflictError();
+  }
+
+  const batch = recoveredCouponBatch(rows.results, input);
+  const serialized = serializeCouponBatch(batch);
+  const now = Math.floor(Date.now() / 1000);
+  const ids = rows.results.map((row) => String(row.id));
+  const placeholders = ids.map(() => "?").join(", ");
+  const results = await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE coupon
+          SET admin_issuance_id = ?
+        WHERE admin_issuance_id IS NULL
+          AND id IN (${placeholders})`,
+    ).bind(record.id, ...ids),
+    env.DB.prepare(
+      `UPDATE admin_coupon_issuance
+          SET status = 'completed', batch = ?, updated_at = ?
+        WHERE id = ? AND request_fingerprint = ? AND status = 'pending'
+          AND (SELECT COUNT(*) FROM coupon WHERE admin_issuance_id = ?) = ?`,
+    ).bind(serialized, now, record.id, fingerprint, record.id, expectedCount),
+  ]);
+  const linked = results[0]?.meta.changes ?? 0;
+  const completed = results[1]?.meta.changes ?? 0;
+  if (linked === expectedCount && completed === 1) {
+    return deserializeCouponBatch(serialized);
+  }
 
   const latest = await readCouponIdempotency(env, actorUserId, key);
   if (latest?.status === "completed" && latest.batch) {
@@ -639,6 +802,7 @@ function errorResponse(context: Context<AppContext>, error: unknown, objectType:
     error instanceof RedemptionCodeDailyCapError ||
     error instanceof RedemptionCodeIdempotencyConflictError ||
     error instanceof AdminIdempotencyConflictError ||
+    error instanceof AdminIdempotencyRecoveryConflictError ||
     error instanceof AdminIdempotencyInProgressError
   ) {
     return context.json(

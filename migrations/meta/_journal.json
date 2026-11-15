@@ -85,6 +85,13 @@
       "when": 1794706581825,
       "tag": "0011_watery_abomination",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1794706581826,
+      "tag": "0012_legacy_coupon_issuance_backfill",
+      "breakpoints": true
     }
   ]
 }

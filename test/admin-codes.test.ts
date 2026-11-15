@@ -281,12 +281,7 @@ describe("platform admin code management", () => {
           SET status = 'pending', batch = NULL, created_at = ?, updated_at = ?
         WHERE actor_user_id = ? AND idempotency_key = ?`,
     )
-      .bind(
-        firstCoupon!.createdAt - 10 * 60,
-        firstCoupon!.createdAt - 10 * 60,
-        user.userId,
-        key,
-      )
+      .bind(firstCoupon!.createdAt - 10 * 60, firstCoupon!.createdAt - 10 * 60, user.userId, key)
       .run();
 
     const replay = await request(
@@ -336,6 +331,155 @@ describe("platform admin code management", () => {
     );
     expect(conflict.status).toBe(409);
     expect(await conflict.json()).toMatchObject({ error: "idempotency_conflict" });
+  });
+
+  it("backfills a unique pre-0011 pending batch before replay", async () => {
+    const user = await signIn("Legacy coupon migration tester");
+    const requestEnv = adminEnv(user.userId);
+    const key = "legacy-pending";
+    const staleAt = Math.floor(Date.now() / 1000) - 600;
+    const issuanceId = crypto.randomUUID();
+    const legacyCodes = ["CBQMAM23Q92J", "CB9GFWG868J7"];
+    const fingerprint = JSON.stringify({
+      rate: 20,
+      count: 2,
+      validDays: 7,
+      note: null,
+      source: "admin",
+    });
+
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO admin_coupon_issuance
+           (id, actor_user_id, idempotency_key, request_fingerprint, status, batch, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 'pending', NULL, ?, ?)`,
+      ).bind(issuanceId, user.userId, key, fingerprint, staleAt, staleAt),
+      ...legacyCodes.map((code, index) =>
+        env.DB.prepare(
+          `INSERT INTO coupon
+             (id, code, discount_rate_bps, status, expires_at, note, source, created_by, createdAt, updatedAt)
+           VALUES (?, ?, ?, 'active', ?, NULL, 'admin', ?, ?, ?)`,
+        ).bind(
+          `legacy-coupon-${String.fromCharCode(97 + index)}`,
+          code,
+          2_000,
+          staleAt + 7 * 86_400,
+          user.userId,
+          staleAt,
+          staleAt,
+        ),
+      ),
+    ]);
+
+    const migrationSql = migrationFiles["../migrations/0012_legacy_coupon_issuance_backfill.sql"];
+    expect(migrationSql).toBeDefined();
+    await env.DB.prepare(migrationSql!).run();
+
+    const linkedBeforeReplay = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM coupon WHERE admin_issuance_id = ?",
+    )
+      .bind(issuanceId)
+      .first<{ count: number }>();
+    expect(linkedBeforeReplay?.count).toBe(2);
+
+    const replay = await request(
+      "/api/admin/coupons",
+      {
+        method: "POST",
+        headers: headers(user.cookie, {
+          "content-type": "application/json",
+          "Idempotency-Key": key,
+        }),
+        body: JSON.stringify({ rate: 20, count: 2, validDays: 7 }),
+      },
+      requestEnv,
+    );
+    expect(replay.status).toBe(201);
+    const replayBody = (await replay.json()) as {
+      data: { codes: Array<{ code: string }>; idempotentReplay: boolean };
+    };
+    expect(replayBody.data.codes.map((row) => row.code)).toEqual(legacyCodes);
+    expect(replayBody.data.idempotentReplay).toBe(true);
+
+    const couponCount = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM coupon WHERE created_by = ?",
+    )
+      .bind(user.userId)
+      .first<{ count: number }>();
+    expect(couponCount?.count).toBe(2);
+  });
+
+  it("rejects an ambiguous unlinked legacy batch without issuing new coupons", async () => {
+    const user = await signIn("Legacy coupon ambiguity tester");
+    const requestEnv = adminEnv(user.userId);
+    const key = "legacy-pending-ambiguous";
+    const staleAt = Math.floor(Date.now() / 1000) - 600;
+    const issuanceId = crypto.randomUUID();
+    const fingerprint = JSON.stringify({
+      rate: 20,
+      count: 2,
+      validDays: 7,
+      note: null,
+      source: "admin",
+    });
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO admin_coupon_issuance
+           (id, actor_user_id, idempotency_key, request_fingerprint, status, batch, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 'pending', NULL, ?, ?)`,
+      ).bind(issuanceId, user.userId, key, fingerprint, staleAt, staleAt),
+      ...["CBAMBIGUOUS1", "CBAMBIGUOUS2", "CBAMBIGUOUS3"].map((code, index) =>
+        env.DB.prepare(
+          `INSERT INTO coupon
+             (id, code, discount_rate_bps, status, expires_at, note, source, created_by, createdAt, updatedAt)
+           VALUES (?, ?, ?, 'active', ?, NULL, 'admin', ?, ?, ?)`,
+        ).bind(
+          `ambiguous-coupon-${index}`,
+          code,
+          2_000,
+          staleAt + 7 * 86_400,
+          user.userId,
+          staleAt,
+          staleAt,
+        ),
+      ),
+    ]);
+
+    const migrationSql = migrationFiles["../migrations/0012_legacy_coupon_issuance_backfill.sql"];
+    expect(migrationSql).toBeDefined();
+    await env.DB.prepare(migrationSql!).run();
+    const linked = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM coupon WHERE admin_issuance_id = ?",
+    )
+      .bind(issuanceId)
+      .first<{ count: number }>();
+    expect(linked?.count).toBe(0);
+
+    const replay = await request(
+      "/api/admin/coupons",
+      {
+        method: "POST",
+        headers: headers(user.cookie, {
+          "content-type": "application/json",
+          "Idempotency-Key": key,
+        }),
+        body: JSON.stringify({ rate: 20, count: 2, validDays: 7 }),
+      },
+      requestEnv,
+    );
+    expect(replay.status).toBe(409);
+    expect(await replay.json()).toMatchObject({ error: "idempotency_recovery_conflict" });
+
+    const couponCount = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM coupon WHERE created_by = ?",
+    )
+      .bind(user.userId)
+      .first<{ count: number }>();
+    expect(couponCount?.count).toBe(3);
+    const issuance = await env.DB.prepare("SELECT status FROM admin_coupon_issuance WHERE id = ?")
+      .bind(issuanceId)
+      .first<{ status: string }>();
+    expect(issuance?.status).toBe("pending");
   });
 
   it("does not recover another key's same-second coupon batch", async () => {
