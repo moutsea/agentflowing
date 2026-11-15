@@ -1039,13 +1039,8 @@ async function sweepDirectQrOrder(
     const intent = matches.data.find(
       (item) => metadataValue(item.metadata, "orderId") === candidate.id,
     );
-    // A successful search with no matching intent confirms that Stripe never
-    // accepted this order. This stale order is safe to fail and release; only
-    // an unavailable or failed search leaves the provider state unknown.
-    if (!intent) {
-      await failDirectQrOrderById(env, candidate.id, true);
-      return "failed";
-    }
+    // Search is eventually consistent; an empty result cannot prove non-payment.
+    if (!intent) return "skipped";
     if (intent.status === "succeeded") {
       await fulfillDirectQrIntent(env, intent);
       return "recovered";

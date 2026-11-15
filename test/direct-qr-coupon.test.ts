@@ -645,6 +645,20 @@ describe("direct QR coupon checkout", () => {
     await expect(
       expireStaleDirectQrOrders({
         env: configuredEnv(),
+        stripe: {
+          paymentIntents: {
+            cancel: async () => { throw new Error("missing provider id"); },
+            retrieve: async () => { throw new Error("missing provider id"); },
+            search: async () => ({ data: [] }),
+          },
+        },
+      }),
+    ).resolves.toEqual({ canceled: 0, recovered: 0, failed: 0 });
+    expect(await couponRow(coupon.id)).toMatchObject({ status: "reserved" });
+
+    await expect(
+      expireStaleDirectQrOrders({
+        env: configuredEnv(),
         staleAfterSeconds: 3_600,
         stripe: {
           paymentIntents: {

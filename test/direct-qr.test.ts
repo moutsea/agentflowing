@@ -844,7 +844,7 @@ describe("expireStaleDirectQrOrders", () => {
     await expect(orderStatus(orderId)).resolves.toBe("processing");
   });
 
-  it("fails an abandoned order that never received an intent", async () => {
+  it("keeps an order pending when Stripe search has not indexed its intent", async () => {
     const { orderId } = await seedSweepOrder({ ageSeconds: 7_200 });
     await expect(
       expireStaleDirectQrOrders({
@@ -858,8 +858,8 @@ describe("expireStaleDirectQrOrders", () => {
           },
         },
       }),
-    ).resolves.toEqual({ canceled: 0, recovered: 0, failed: 1 });
-    await expect(orderStatus(orderId)).resolves.toBe("failed");
+    ).resolves.toEqual({ canceled: 0, recovered: 0, failed: 0 });
+    await expect(orderStatus(orderId)).resolves.toBe("processing");
   });
 
   it("keeps a reserved coupon when Stripe search is unavailable", async () => {

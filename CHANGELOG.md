@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 
 - T7/R1: reconcile failed Stripe attempts and release coupon reservations only after confirmed cancellation.
+- T7/R2: keep orders and coupon reservations pending when Stripe search has not indexed the payment.
 
 ## [0.1.0] - 2026-08-07
 
