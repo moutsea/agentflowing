@@ -278,19 +278,17 @@ export const coupon = sqliteTable(
     reservedByUserId: text("reserved_by_user_id").references(() => user.id, {
       onDelete: "set null",
     }),
-    reservedOrganizationId: text("reserved_organization_id").references(
-      () => organization.id,
-      { onDelete: "set null" },
-    ),
+    reservedOrganizationId: text("reserved_organization_id").references(() => organization.id, {
+      onDelete: "set null",
+    }),
     reservedAt: integer("reserved_at", { mode: "timestamp" }),
     reservationExpiresAt: integer("reservation_expires_at", { mode: "timestamp" }),
     redeemedByUserId: text("redeemed_by_user_id").references(() => user.id, {
       onDelete: "set null",
     }),
-    redeemedOrganizationId: text("redeemed_organization_id").references(
-      () => organization.id,
-      { onDelete: "set null" },
-    ),
+    redeemedOrganizationId: text("redeemed_organization_id").references(() => organization.id, {
+      onDelete: "set null",
+    }),
     redeemedAt: integer("redeemed_at", { mode: "timestamp" }),
     revokedAt: integer("revoked_at", { mode: "timestamp" }),
     note: text("note"),
@@ -311,10 +309,7 @@ export const coupon = sqliteTable(
       "coupon_discount_rate_bps_check",
       sql`typeof(${table.discountRateBps}) = 'integer' AND ${table.discountRateBps} BETWEEN 1 AND 5000`,
     ),
-    check(
-      "coupon_expires_at_check",
-      sql`${table.expiresAt} > ${table.createdAt}`,
-    ),
+    check("coupon_expires_at_check", sql`${table.expiresAt} > ${table.createdAt}`),
     check(
       "coupon_reservation_window_check",
       sql`${table.reservationExpiresAt} IS NULL OR (${table.reservedAt} IS NOT NULL AND ${table.reservationExpiresAt} > ${table.reservedAt})`,
@@ -363,10 +358,9 @@ export const redemptionCode = sqliteTable(
     redeemedByUserId: text("redeemed_by_user_id").references(() => user.id, {
       onDelete: "set null",
     }),
-    redeemedOrganizationId: text("redeemed_organization_id").references(
-      () => organization.id,
-      { onDelete: "set null" },
-    ),
+    redeemedOrganizationId: text("redeemed_organization_id").references(() => organization.id, {
+      onDelete: "set null",
+    }),
     redeemedAt: integer("redeemed_at", { mode: "timestamp" }),
     revokedAt: integer("revoked_at", { mode: "timestamp" }),
     note: text("note"),
@@ -393,10 +387,7 @@ export const redemptionCode = sqliteTable(
       "redemption_code_batch_index_check",
       sql`typeof(${table.batchIndex}) = 'integer' AND ${table.batchIndex} >= 0`,
     ),
-    check(
-      "redemption_code_expires_at_check",
-      sql`${table.expiresAt} > ${table.createdAt}`,
-    ),
+    check("redemption_code_expires_at_check", sql`${table.expiresAt} > ${table.createdAt}`),
     check(
       "redemption_code_redeemed_at_check",
       sql`${table.redeemedAt} IS NULL OR ${table.redeemedAt} >= ${table.createdAt}`,

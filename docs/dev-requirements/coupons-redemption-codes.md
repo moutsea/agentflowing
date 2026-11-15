@@ -86,11 +86,11 @@
 
 路由继续采用 Hono module、`requireAuth`、`API_RATE_LIMITER` 和全局 observability；所有写操作校验同源 `origin`，响应带 `x-request-id` 和 `Cache-Control: no-store`。
 
-| 方法与路径 | 请求 | 成功响应 | 规则 |
-| --- | --- | --- | --- |
-| `POST /api/billing/coupons/validate` | `{ "code": "CB..." }` | `{ "valid": true, "rate": 20, "expiresAt": "..." }` | 只预览，不预留、不消耗；无效时 `valid: false` 和稳定 `reason`。 |
-| `POST /api/billing/redemption-codes/validate` | `{ "code": "RC..." }` | `{ "valid": true, "credits": 5, "expiresAt": "..." }` | 只预览，不 claim，不暴露兑换人。 |
-| `POST /api/billing/redemption-codes/redeem` | `{ "code": "RC..." }` | `{ "data": { "credits": 5, "balance": 105, "ledgerId": "..." } }` | 原子 claim + `grant` 入账；重复、过期、撤销分别返回稳定错误。 |
+| 方法与路径                                    | 请求                  | 成功响应                                                          | 规则                                                            |
+| --------------------------------------------- | --------------------- | ----------------------------------------------------------------- | --------------------------------------------------------------- |
+| `POST /api/billing/coupons/validate`          | `{ "code": "CB..." }` | `{ "valid": true, "rate": 20, "expiresAt": "..." }`               | 只预览，不预留、不消耗；无效时 `valid: false` 和稳定 `reason`。 |
+| `POST /api/billing/redemption-codes/validate` | `{ "code": "RC..." }` | `{ "valid": true, "credits": 5, "expiresAt": "..." }`             | 只预览，不 claim，不暴露兑换人。                                |
+| `POST /api/billing/redemption-codes/redeem`   | `{ "code": "RC..." }` | `{ "data": { "credits": 5, "balance": 105, "ledgerId": "..." } }` | 原子 claim + `grant` 入账；重复、过期、撤销分别返回稳定错误。   |
 
 结账请求允许携带 `couponCode`，但优惠券只能影响 `order.kind = "credit_pack"` 的充值订单；确认后的折扣、金额和优惠券引用必须写入订单。订阅结账继续按原有订阅规则运行。
 

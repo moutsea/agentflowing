@@ -18,19 +18,19 @@ x-api-token: <TOKEN>
 
 鉴权 header 字段：
 
-| Header | 类型 | 必填 | 默认值 | 上限/规则 |
-| --- | --- | --- | --- | --- |
-| `Authorization` | string | 与 `x-api-token` 二选一 | 无 | 必须是 `Bearer <TOKEN>`；若存在则优先校验 |
-| `x-api-token` | string | 与 `Authorization` 二选一 | 无 | 使用对应资源的 token；无单独长度上限 |
+| Header          | 类型   | 必填                      | 默认值 | 上限/规则                                 |
+| --------------- | ------ | ------------------------- | ------ | ----------------------------------------- |
+| `Authorization` | string | 与 `x-api-token` 二选一   | 无     | 必须是 `Bearer <TOKEN>`；若存在则优先校验 |
+| `x-api-token`   | string | 与 `Authorization` 二选一 | 无     | 使用对应资源的 token；无单独长度上限      |
 
 当两个 header 同时存在时，服务端只校验 `Authorization`。因此，即使 `x-api-token` 正确，只要 `Authorization` 缺少 `Bearer`、格式错误或 token 错误，结果仍为 `401`。
 
 两套 token 完全隔离：
 
-| 资源 | 服务端配置 | 可访问路径 |
-| --- | --- | --- |
+| 资源   | 服务端配置                           | 可访问路径                         |
+| ------ | ------------------------------------ | ---------------------------------- |
 | 兑换码 | `EXTERNAL_REDEMPTION_CODE_API_TOKEN` | `/api/external/redemption-codes/*` |
-| 优惠券 | `EXTERNAL_COUPON_API_TOKEN` | `/api/external/coupons/*` |
+| 优惠券 | `EXTERNAL_COUPON_API_TOKEN`          | `/api/external/coupons/*`          |
 
 通过 `Origin` 检查后，把另一套 token 用在错误资源上返回 `401`；写请求若显式携带错误的 `Origin`，会先返回 `403`，尚未进入 token 鉴权。对应服务端 token 未配置或为空时返回 `503`。token 不出现在响应、日志或示例中；本文示例只使用占位符 `<TOKEN>`。
 
@@ -55,19 +55,19 @@ x-request-id: <REQUEST_ID>
 
 请求 body：
 
-| 字段 | 类型 | 必填 | 默认值 | 上限/规则 |
-| --- | --- | --- | --- | --- |
-| `credits` | integer | 否 | `5` | 正的安全整数，最大 `9007199254740991`；面值单位是 credits |
-| `count` | integer | 否 | `1` | `1..100` |
-| `validDays` | integer | 否 | `30` | `1..365` 天 |
-| `note` | string 或 `null` | 否 | `null` | 服务端会 trim；无单独长度上限 |
-| `source` | string | 否 | `admin` | 空字符串 trim 后也使用 `admin`；无单独长度上限 |
+| 字段        | 类型             | 必填 | 默认值  | 上限/规则                                                 |
+| ----------- | ---------------- | ---- | ------- | --------------------------------------------------------- |
+| `credits`   | integer          | 否   | `5`     | 正的安全整数，最大 `9007199254740991`；面值单位是 credits |
+| `count`     | integer          | 否   | `1`     | `1..100`                                                  |
+| `validDays` | integer          | 否   | `30`    | `1..365` 天                                               |
+| `note`      | string 或 `null` | 否   | `null`  | 服务端会 trim；无单独长度上限                             |
+| `source`    | string           | 否   | `admin` | 空字符串 trim 后也使用 `admin`；无单独长度上限            |
 
 幂等请求头：
 
-| Header | 类型 | 必填 | 默认值 | 上限/规则 |
-| --- | --- | --- | --- | --- |
-| `Idempotency-Key` | string | 否 | 未提供时由服务端生成随机 key | trim 后必须为 `1..128` 个字符；重试发行时必须复用同一个 key |
+| Header            | 类型   | 必填 | 默认值                       | 上限/规则                                                   |
+| ----------------- | ------ | ---- | ---------------------------- | ----------------------------------------------------------- |
+| `Idempotency-Key` | string | 否   | 未提供时由服务端生成随机 key | trim 后必须为 `1..128` 个字符；重试发行时必须复用同一个 key |
 
 成功响应：
 
@@ -90,24 +90,24 @@ x-request-id: <REQUEST_ID>
 }
 ```
 
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
+| 字段    | 类型          | 说明                                                 |
+| ------- | ------------- | ---------------------------------------------------- |
 | `codes` | array<object> | 本次发行的 code 对象数组，元素数量等于请求的 `count` |
 
 `codes` 中每个对象的字段：
 
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `code` | string | 生成的兑换码 |
-| `credits` | integer | 此码可兑换的 credits |
-| `status` | `active \| expired \| revoked \| used` | 新发行的码为 `active` |
-| `expiresAt` | string | 到期时间 |
-| `redeemedAt` | string 或 `null` | 成功兑换时间 |
-| `revokedAt` | string 或 `null` | 撤销时间 |
-| `note` | string 或 `null` | 请求中的备注 |
-| `source` | string | 来源，默认 `admin` |
-| `createdAt` | string | 创建时间 |
-| `redeemedByUserId` | string 或 `null` | 兑换用户；未兑换时为 `null` |
+| 字段               | 类型                                   | 说明                        |
+| ------------------ | -------------------------------------- | --------------------------- |
+| `code`             | string                                 | 生成的兑换码                |
+| `credits`          | integer                                | 此码可兑换的 credits        |
+| `status`           | `active \| expired \| revoked \| used` | 新发行的码为 `active`       |
+| `expiresAt`        | string                                 | 到期时间                    |
+| `redeemedAt`       | string 或 `null`                       | 成功兑换时间                |
+| `revokedAt`        | string 或 `null`                       | 撤销时间                    |
+| `note`             | string 或 `null`                       | 请求中的备注                |
+| `source`           | string                                 | 来源，默认 `admin`          |
+| `createdAt`        | string                                 | 创建时间                    |
+| `redeemedByUserId` | string 或 `null`                       | 兑换用户；未兑换时为 `null` |
 
 每日额度以 UTC 日为边界，按整数 credits 原子扣减。`REDEMPTION_CODE_DAILY_CREDITS_CAP` 未配置或不是有限数字时使用实现中的默认值 `5000`；批次所需 `credits * count` 超过剩余额度时返回 `429`，不会部分发行或消耗额度。
 
@@ -117,19 +117,19 @@ x-request-id: <REQUEST_ID>
 
 请求字段：
 
-| 位置 | 字段 | 类型 | 必填 | 默认值 | 上限/规则 |
-| --- | --- | --- | --- | --- | --- |
-| — | 无 | — | — | — | 无 body、query 或 path 参数 |
+| 位置 | 字段 | 类型 | 必填 | 默认值 | 上限/规则                   |
+| ---- | ---- | ---- | ---- | ------ | --------------------------- |
+| —    | 无   | —    | —    | —      | 无 body、query 或 path 参数 |
 
 成功响应字段：
 
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `creditsIssued` | integer | 当日已发行的 credits 总量 |
+| 字段               | 类型    | 说明                                      |
+| ------------------ | ------- | ----------------------------------------- |
+| `creditsIssued`    | integer | 当日已发行的 credits 总量                 |
 | `creditsRemaining` | integer | `max(0, dailyCreditsCap - creditsIssued)` |
-| `dailyCreditsCap` | integer | 当前每日 credits 上限 |
-| `codeCount` | integer | 当日发行的兑换码数量 |
-| `capReached` | boolean | `creditsIssued >= dailyCreditsCap` |
+| `dailyCreditsCap`  | integer | 当前每日 credits 上限                     |
+| `codeCount`        | integer | 当日发行的兑换码数量                      |
+| `capReached`       | boolean | `creditsIssued >= dailyCreditsCap`        |
 
 ### `GET /api/external/redemption-codes/:code`
 
@@ -137,9 +137,9 @@ x-request-id: <REQUEST_ID>
 
 请求字段：
 
-| 位置 | 字段 | 类型 | 必填 | 默认值 | 上限/规则 |
-| --- | --- | --- | --- | --- | --- |
-| path | `code` | string | 是 | 无 | `^RC[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{12}$`（规范化后） |
+| 位置 | 字段   | 类型   | 必填 | 默认值 | 上限/规则                                                |
+| ---- | ------ | ------ | ---- | ------ | -------------------------------------------------------- |
+| path | `code` | string | 是   | 无     | `^RC[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{12}$`（规范化后） |
 
 成功响应字段：使用“`POST` 发行”中的单个 code 对象字段表。
 
@@ -149,20 +149,20 @@ x-request-id: <REQUEST_ID>
 
 请求字段：
 
-| 位置 | 字段 | 类型 | 必填 | 默认值 | 上限/规则 |
-| --- | --- | --- | --- | --- | --- |
-| path | `code` | string | 是 | 无 | `^RC[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{12}$`（规范化后） |
+| 位置 | 字段   | 类型   | 必填 | 默认值 | 上限/规则                                                |
+| ---- | ------ | ------ | ---- | ------ | -------------------------------------------------------- |
+| path | `code` | string | 是   | 无     | `^RC[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{12}$`（规范化后） |
 
 成功响应字段：使用“`POST` 发行”中的单个 code 对象字段表。
 
 兑换码状态含义：
 
-| `status` | 含义 |
-| --- | --- |
-| `active` | 未过期、未撤销、未兑换，可兑换 |
-| `expired` | `expiresAt` 已到期 |
-| `revoked` | 已撤销，不能兑换 |
-| `used` | 已兑换，不能再次兑换 |
+| `status`  | 含义                           |
+| --------- | ------------------------------ |
+| `active`  | 未过期、未撤销、未兑换，可兑换 |
+| `expired` | `expiresAt` 已到期             |
+| `revoked` | 已撤销，不能兑换               |
+| `used`    | 已兑换，不能再次兑换           |
 
 兑换动作由登录用户接口执行；对外接口只发行、查询和撤销。登录用户兑换语义中的格式错误可使用 `invalid_code`，但它不是外部 GET/DELETE 的响应值。外部 GET/DELETE 的 code 格式错误统一返回 `400` 和 `error: "invalid_request"`；格式正确但不存在返回 `not_found`（`404`）。兑换相关的 `expired`、`revoked`、`already_used` 表示状态冲突（`409`）。
 
@@ -194,38 +194,38 @@ curl -i -X POST 'https://api.example.com/api/external/redemption-codes' \
 
 请求字段：
 
-| 位置 | 字段 | 类型 | 必填 | 默认值 | 上限/规则 |
-| --- | --- | --- | --- | --- | --- |
-| path | `code` | string | 是 | 无 | `^CB[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{10}$`（规范化后） |
+| 位置 | 字段   | 类型   | 必填 | 默认值 | 上限/规则                                                |
+| ---- | ------ | ------ | ---- | ------ | -------------------------------------------------------- |
+| path | `code` | string | 是   | 无     | `^CB[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{10}$`（规范化后） |
 
 成功响应字段：
 
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `code` | string | 优惠券代码 |
-| `rate` | integer | 折扣百分比整数，范围由优惠券服务保证为 `1..50` |
-| `status` | `active \| used \| expired \| revoked` | 对外状态；内部 `reserved` 映射为 `used` |
-| `expiresAt` | string | 到期时间 |
-| `reservedAt` | string 或 `null` | 预留时间 |
-| `redeemedAt` | string 或 `null` | 支付确认并最终使用的时间 |
-| `revokedAt` | string 或 `null` | 撤销时间 |
-| `note` | string 或 `null` | 备注 |
-| `source` | string | 来源 |
-| `createdAt` | string | 创建时间 |
-| `usageState` | `available \| reserved \| redeemed` | 细分使用状态 |
-| `isReservationActive` | boolean | 当前预留是否仍有效 |
-| `reservationStatus` | `reserved \| not_reserved` | 是否存在当前预留 |
-| `paymentStatus` | `pending \| confirmed \| not_confirmed` | 支付确认状态 |
+| 字段                  | 类型                                    | 说明                                           |
+| --------------------- | --------------------------------------- | ---------------------------------------------- |
+| `code`                | string                                  | 优惠券代码                                     |
+| `rate`                | integer                                 | 折扣百分比整数，范围由优惠券服务保证为 `1..50` |
+| `status`              | `active \| used \| expired \| revoked`  | 对外状态；内部 `reserved` 映射为 `used`        |
+| `expiresAt`           | string                                  | 到期时间                                       |
+| `reservedAt`          | string 或 `null`                        | 预留时间                                       |
+| `redeemedAt`          | string 或 `null`                        | 支付确认并最终使用的时间                       |
+| `revokedAt`           | string 或 `null`                        | 撤销时间                                       |
+| `note`                | string 或 `null`                        | 备注                                           |
+| `source`              | string                                  | 来源                                           |
+| `createdAt`           | string                                  | 创建时间                                       |
+| `usageState`          | `available \| reserved \| redeemed`     | 细分使用状态                                   |
+| `isReservationActive` | boolean                                 | 当前预留是否仍有效                             |
+| `reservationStatus`   | `reserved \| not_reserved`              | 是否存在当前预留                               |
+| `paymentStatus`       | `pending \| confirmed \| not_confirmed` | 支付确认状态                                   |
 
 预留和支付确认的区分：
 
-| 外部响应 | 含义 |
-| --- | --- |
-| `status: "active"`, `usageState: "available"`, `reservationStatus: "not_reserved"`, `paymentStatus: "not_confirmed"` | 可用，尚未预留 |
+| 外部响应                                                                                                                             | 含义                                                          |
+| ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------- |
+| `status: "active"`, `usageState: "available"`, `reservationStatus: "not_reserved"`, `paymentStatus: "not_confirmed"`                 | 可用，尚未预留                                                |
 | `status: "used"`, `usageState: "reserved"`, `isReservationActive: true`, `reservationStatus: "reserved"`, `paymentStatus: "pending"` | 仅为结账预留，尚未支付确认；内部 `reserved` 对外显示为 `used` |
-| `status: "used"`, `usageState: "redeemed"`, `redeemedAt` 非 `null`, `paymentStatus: "confirmed"` | 支付已确认并最终使用 |
-| `status: "expired"` | 已过期 |
-| `status: "revoked"` | 已撤销 |
+| `status: "used"`, `usageState: "redeemed"`, `redeemedAt` 非 `null`, `paymentStatus: "confirmed"`                                     | 支付已确认并最终使用                                          |
+| `status: "expired"`                                                                                                                  | 已过期                                                        |
+| `status: "revoked"`                                                                                                                  | 已撤销                                                        |
 
 ### `DELETE /api/external/coupons/:code`
 
@@ -233,9 +233,9 @@ curl -i -X POST 'https://api.example.com/api/external/redemption-codes' \
 
 请求字段：
 
-| 位置 | 字段 | 类型 | 必填 | 默认值 | 上限/规则 |
-| --- | --- | --- | --- | --- | --- |
-| path | `code` | string | 是 | 无 | `^CB[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{10}$`（规范化后） |
+| 位置 | 字段   | 类型   | 必填 | 默认值 | 上限/规则                                                |
+| ---- | ------ | ------ | ---- | ------ | -------------------------------------------------------- |
+| path | `code` | string | 是   | 无     | `^CB[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{10}$`（规范化后） |
 
 成功响应字段：使用“`GET` 优惠券核查”中的完整优惠券详情字段表。
 
@@ -255,16 +255,16 @@ curl -i -X POST 'https://api.example.com/api/external/redemption-codes' \
 }
 ```
 
-| HTTP | `error`/`reason` 示例 | 含义与处理 |
-| --- | --- | --- |
-| `400` | `invalid_request` | 输入、JSON schema、字段范围或代码格式错误；修正请求后再发 |
-| `401` | `unauthorized` | 缺少 token、token 错误、使用了另一资源的 token，或两个 header 同时存在但 `Authorization` 校验失败 |
-| `403` | `forbidden` | 写请求显式携带了与 `APP_URL` 不同的 `Origin` |
-| `404` | `not_found` | 资源不存在，或已认证资源下未实现的路径/方法；`POST /api/external/coupons` 也属于此类 |
-| `409` | `idempotency_conflict`、`already_used`、`reserved`、`conflict` | 同 key 不同参数、已兑换/已确认、结账预留竞争或状态并发冲突 |
-| `429` | `daily_cap_reached`、`rate_limited` | 达到每日 credits 发行额度，或触发 API 限流；限流响应带 `Retry-After` |
-| `500` | `internal_error` | 暂时性服务端故障，响应文案提示可重试 |
-| `503` | `service_unavailable` | 对应资源的服务端 token 未配置 |
+| HTTP  | `error`/`reason` 示例                                          | 含义与处理                                                                                        |
+| ----- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `400` | `invalid_request`                                              | 输入、JSON schema、字段范围或代码格式错误；修正请求后再发                                         |
+| `401` | `unauthorized`                                                 | 缺少 token、token 错误、使用了另一资源的 token，或两个 header 同时存在但 `Authorization` 校验失败 |
+| `403` | `forbidden`                                                    | 写请求显式携带了与 `APP_URL` 不同的 `Origin`                                                      |
+| `404` | `not_found`                                                    | 资源不存在，或已认证资源下未实现的路径/方法；`POST /api/external/coupons` 也属于此类              |
+| `409` | `idempotency_conflict`、`already_used`、`reserved`、`conflict` | 同 key 不同参数、已兑换/已确认、结账预留竞争或状态并发冲突                                        |
+| `429` | `daily_cap_reached`、`rate_limited`                            | 达到每日 credits 发行额度，或触发 API 限流；限流响应带 `Retry-After`                              |
+| `500` | `internal_error`                                               | 暂时性服务端故障，响应文案提示可重试                                                              |
+| `503` | `service_unavailable`                                          | 对应资源的服务端 token 未配置                                                                     |
 
 兑换码发行触及每日额度使用 `daily_cap_reached`；它与一般请求限流的 `rate_limited` 都是 `429`，但前者通常应等到下一个 UTC 日或额度调整后再试。
 
