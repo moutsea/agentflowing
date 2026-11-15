@@ -278,10 +278,15 @@ describe("platform admin code management", () => {
 
     await env.DB.prepare(
       `UPDATE admin_coupon_issuance
-          SET status = 'pending', batch = NULL, updated_at = ?
+          SET status = 'pending', batch = NULL, created_at = ?, updated_at = ?
         WHERE actor_user_id = ? AND idempotency_key = ?`,
     )
-      .bind(firstCoupon!.createdAt, user.userId, key)
+      .bind(
+        firstCoupon!.createdAt - 10 * 60,
+        firstCoupon!.createdAt - 10 * 60,
+        user.userId,
+        key,
+      )
       .run();
 
     const replay = await request(
@@ -331,6 +336,97 @@ describe("platform admin code management", () => {
     );
     expect(conflict.status).toBe(409);
     expect(await conflict.json()).toMatchObject({ error: "idempotency_conflict" });
+  });
+
+  it("does not recover another key's same-second coupon batch", async () => {
+    const user = await signIn("Coupon batch boundary tester");
+    const requestEnv = adminEnv(user.userId);
+    const pendingKey = "coupon-pending-boundary";
+    const otherKey = "coupon-other-boundary";
+    const staleAt = Math.floor(Date.now() / 1000) - 120;
+    const fingerprint = JSON.stringify({
+      rate: 20,
+      count: 2,
+      validDays: 7,
+      note: null,
+      source: "admin",
+    });
+    const pendingId = crypto.randomUUID();
+    await env.DB.prepare(
+      `INSERT INTO admin_coupon_issuance
+         (id, actor_user_id, idempotency_key, request_fingerprint, status, batch, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'pending', NULL, ?, ?)`,
+    )
+      .bind(pendingId, user.userId, pendingKey, fingerprint, staleAt, staleAt)
+      .run();
+
+    const other = await request(
+      "/api/admin/coupons",
+      {
+        method: "POST",
+        headers: headers(user.cookie, {
+          "content-type": "application/json",
+          "Idempotency-Key": otherKey,
+        }),
+        body: JSON.stringify({ rate: 20, count: 2, validDays: 7 }),
+      },
+      requestEnv,
+    );
+    expect(other.status).toBe(201);
+    const otherBody = (await other.json()) as {
+      data: { codes: Array<{ code: string }> };
+    };
+    const otherCodes = otherBody.data.codes.map((row) => row.code);
+    const otherFirst = await env.DB.prepare(
+      `SELECT createdAt FROM coupon WHERE admin_issuance_id = (
+         SELECT id FROM admin_coupon_issuance WHERE actor_user_id = ? AND idempotency_key = ?
+       ) ORDER BY id LIMIT 1`,
+    )
+      .bind(user.userId, otherKey)
+      .first<{ createdAt: number }>();
+    expect(otherFirst?.createdAt).toEqual(expect.any(Number));
+    await env.DB.prepare(
+      `UPDATE coupon
+          SET createdAt = ?, expires_at = ?, updatedAt = ?
+        WHERE admin_issuance_id = (
+          SELECT id FROM admin_coupon_issuance WHERE actor_user_id = ? AND idempotency_key = ?
+        )`,
+    )
+      .bind(staleAt, staleAt + 7 * 86_400, staleAt, user.userId, otherKey)
+      .run();
+
+    const replay = await request(
+      "/api/admin/coupons",
+      {
+        method: "POST",
+        headers: headers(user.cookie, {
+          "content-type": "application/json",
+          "Idempotency-Key": pendingKey,
+        }),
+        body: JSON.stringify({ rate: 20, count: 2, validDays: 7 }),
+      },
+      adminEnv(user.userId),
+    );
+    expect(replay.status).toBe(201);
+    const replayBody = (await replay.json()) as {
+      data: { codes: Array<{ code: string }>; idempotentReplay: boolean };
+    };
+    expect(replayBody.data.idempotentReplay).toBe(false);
+    expect(replayBody.data.codes.map((row) => row.code)).not.toEqual(
+      expect.arrayContaining(otherCodes),
+    );
+    const couponCount = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM coupon WHERE created_by = ?",
+    )
+      .bind(user.userId)
+      .first<{ count: number }>();
+    expect(couponCount?.count).toBe(4);
+    const linked = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM coupon WHERE admin_issuance_id = ?",
+    )
+      .bind(pendingId)
+      .first<{ count: number }>();
+    expect(linked?.count).toBe(2);
   });
 
   it("reclaims an expired pending coupon issuance lease", async () => {

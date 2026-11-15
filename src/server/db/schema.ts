@@ -296,11 +296,15 @@ export const coupon = sqliteTable(
     note: text("note"),
     source: text("source").notNull().default("admin"),
     createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    adminIssuanceId: text("admin_issuance_id").references(() => adminCouponIssuance.id, {
+      onDelete: "set null",
+    }),
     ...timestamps,
   },
   (table) => [
     uniqueIndex("coupon_code_uidx").on(table.code),
     uniqueIndex("coupon_reservation_id_uidx").on(table.reservationId),
+    index("coupon_admin_issuance_idx").on(table.adminIssuanceId),
     index("coupon_status_expires_idx").on(table.status, table.expiresAt),
     index("coupon_reservation_expires_idx").on(table.reservationExpiresAt),
     check(

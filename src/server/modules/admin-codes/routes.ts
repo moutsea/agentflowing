@@ -14,6 +14,7 @@ import {
   CouponServiceError,
   CouponValidationError,
   couponBpsToRate,
+  generateCouponCode,
   getCouponView,
   isCouponCodeFormat,
   issueCoupons,
@@ -137,7 +138,6 @@ type CouponIdempotencyRecord = {
 };
 
 const COUPON_IDEMPOTENCY_LEASE_SECONDS = 30;
-const COUPON_RECOVERY_WINDOW_SECONDS = 5 * 60;
 
 // The D1 row is the source of truth. This map only joins requests that are
 // already in flight in one isolate; completed batches are always read from D1.
@@ -267,20 +267,6 @@ async function recoverCouponBatch(
   record: CouponIdempotencyRecord,
   input: Parameters<typeof issueCoupons>[0],
 ) {
-  const note = typeof input.note === "string" ? input.note.trim() || null : (input.note ?? null);
-  const source = typeof input.source === "string" ? input.source.trim() || "admin" : "admin";
-  const recoveryAnchor = Math.max(record.createdAt, record.updatedAt);
-  const lowerCreatedAt = Math.min(record.createdAt, record.updatedAt) - 5;
-  const upperCreatedAt = recoveryAnchor + COUPON_RECOVERY_WINDOW_SECONDS;
-  const notePredicate = note === null ? "note IS NULL" : "note = ?";
-  const bindings: unknown[] = [
-    actorUserId,
-    input.rate * 100,
-    source,
-    lowerCreatedAt,
-    upperCreatedAt,
-  ];
-  if (note !== null) bindings.splice(3, 0, note);
   const rows = await env.DB.prepare(
     `SELECT id, code, discount_rate_bps AS discountRateBps, status,
             expires_at AS expiresAt, reservation_id AS reservationId,
@@ -291,45 +277,19 @@ async function recoverCouponBatch(
             redeemed_by_user_id AS redeemedByUserId,
             redeemed_organization_id AS redeemedOrganizationId,
             redeemed_at AS redeemedAt, revoked_at AS revokedAt,
-            note, source, created_by AS createdBy, createdAt, updatedAt
+            note, source, created_by AS createdBy,
+            admin_issuance_id AS adminIssuanceId, createdAt, updatedAt
        FROM coupon
-      WHERE created_by = ?
-        AND discount_rate_bps = ?
-        AND source = ?
-        AND ${notePredicate}
-        AND createdAt BETWEEN ? AND ?
-      ORDER BY createdAt ASC, id ASC`,
+      WHERE admin_issuance_id = ?
+      ORDER BY id ASC`,
   )
-    .bind(...bindings)
+    .bind(record.id)
     .all<Record<string, unknown>>();
 
   const expectedCount = input.count ?? 1;
-  const expectedValidDays = input.validDays ?? 7;
-  const batches = new Map<number, Array<Record<string, unknown>>>();
-  for (const row of rows.results) {
-    const createdAt = Number(row.createdAt);
-    const expiresAt = Number(row.expiresAt);
-    if (!Number.isFinite(createdAt) || expiresAt !== createdAt + expectedValidDays * 86_400) {
-      continue;
-    }
-    const group = batches.get(createdAt) ?? [];
-    group.push(row);
-    batches.set(createdAt, group);
-  }
-  const matchingBatches = [...batches.entries()].filter(
-    ([, group]) => group.length >= expectedCount,
-  );
-  const candidate = matchingBatches.sort(([left], [right]) => {
-    const leftIsAfterReservation = left >= recoveryAnchor;
-    const rightIsAfterReservation = right >= recoveryAnchor;
-    if (leftIsAfterReservation !== rightIsAfterReservation) {
-      return leftIsAfterReservation ? -1 : 1;
-    }
-    return Math.abs(left - recoveryAnchor) - Math.abs(right - recoveryAnchor);
-  })[0]?.[1];
-  if (!candidate) return null;
+  if (rows.results.length < expectedCount) return null;
 
-  const batch = recoveredCouponBatch(candidate.slice(0, expectedCount), input);
+  const batch = recoveredCouponBatch(rows.results.slice(0, expectedCount), input);
   const serialized = serializeCouponBatch(batch);
   const completed = await env.DB.prepare(
     `UPDATE admin_coupon_issuance
@@ -401,6 +361,99 @@ class AdminIdempotencyInProgressError extends Error {
   }
 }
 
+async function issueCouponsWithIssuance(
+  env: Env,
+  issuanceId: string,
+  input: Parameters<typeof issueCoupons>[0],
+) {
+  const count = input.count ?? 1;
+  const validDays = input.validDays ?? 7;
+  const source = input.source?.trim() || "admin";
+  const note = input.note?.trim() || null;
+  const createdBy = input.createdBy?.trim() || null;
+  const now = Math.floor(Date.now() / 1000);
+  const expiresAt = now + validDays * 86_400;
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const rows = Array.from({ length: count }, () => ({
+      id: crypto.randomUUID(),
+      code: generateCouponCode(),
+      discountRateBps: input.rate * 100,
+      status: "active" as const,
+      expiresAt: new Date(expiresAt * 1000),
+      reservationId: null,
+      reservedByUserId: null,
+      reservedOrganizationId: null,
+      reservedAt: null,
+      reservationExpiresAt: null,
+      redeemedByUserId: null,
+      redeemedOrganizationId: null,
+      redeemedAt: null,
+      revokedAt: null,
+      note,
+      source,
+      createdBy,
+      adminIssuanceId: issuanceId,
+      createdAt: new Date(now * 1000),
+      updatedAt: new Date(now * 1000),
+    }));
+    const batch = recoveredCouponBatch(rows, input);
+    batch.codes.sort((left, right) => left.id.localeCompare(right.id));
+    const serialized = serializeCouponBatch(batch);
+    const statements = rows.map((row) =>
+      env.DB.prepare(
+        `INSERT INTO coupon
+         (id, code, discount_rate_bps, status, expires_at, note, source, created_by,
+          admin_issuance_id, createdAt, updatedAt)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+          WHERE EXISTS (
+            SELECT 1 FROM admin_coupon_issuance
+             WHERE id = ? AND status = 'pending'
+          )`,
+      ).bind(
+        row.id,
+        row.code,
+        row.discountRateBps,
+        row.status,
+        expiresAt,
+        row.note,
+        row.source,
+        row.createdBy,
+        issuanceId,
+        now,
+        now,
+        issuanceId,
+      ),
+    );
+    statements.push(
+      env.DB.prepare(
+        `UPDATE admin_coupon_issuance
+            SET status = 'completed', batch = ?, updated_at = ?
+          WHERE id = ? AND status = 'pending'`,
+      ).bind(serialized, now, issuanceId),
+    );
+    try {
+      const results = await env.DB.batch(statements);
+      const completion = results.at(-1);
+      if (completion?.meta.changes !== 1) {
+        const latest = await env.DB.prepare(
+          `SELECT status, batch FROM admin_coupon_issuance WHERE id = ? LIMIT 1`,
+        )
+          .bind(issuanceId)
+          .first<{ status: string; batch: string | null }>();
+        if (latest?.status === "completed" && latest.batch) {
+          return deserializeCouponBatch(latest.batch);
+        }
+        throw new Error("Coupon idempotency record was not completed");
+      }
+      return batch;
+    } catch (error) {
+      if (attempt === 3) throw error;
+    }
+  }
+  throw new Error("Coupon issuance failed");
+}
+
 async function issueReservedCoupons(
   env: Env,
   replayKey: string,
@@ -411,36 +464,14 @@ async function issueReservedCoupons(
 ) {
   const map = couponReplayMap(env);
   const promise = (async () => {
-    let batch: CouponBatch;
     try {
-      batch = await issueCoupons(input);
-      // Persist and return a stable order so a recovered batch is byte-for-byte
-      // identical even though the coupon table has no batch-index column.
-      batch.codes.sort((left, right) => left.id.localeCompare(right.id));
+      return await issueCouponsWithIssuance(env, reservationId, input);
     } catch (error) {
       await env.DB.prepare("DELETE FROM admin_coupon_issuance WHERE id = ? AND status = 'pending'")
         .bind(reservationId)
         .run();
       throw error;
     }
-    const completed = await env.DB.prepare(
-      `UPDATE admin_coupon_issuance
-          SET status = 'completed', batch = ?, updated_at = ?
-        WHERE id = ? AND status = 'pending'`,
-    )
-      .bind(serializeCouponBatch(batch), Math.floor(Date.now() / 1000), reservationId)
-      .run();
-    if (completed.meta.changes !== 1) {
-      const latest = await env.DB.prepare(
-        `SELECT status, batch FROM admin_coupon_issuance WHERE id = ? LIMIT 1`,
-      )
-        .bind(reservationId)
-        .first<{ status: string; batch: string | null }>();
-      if (latest?.status === "completed" && latest.batch)
-        return deserializeCouponBatch(latest.batch);
-      throw new Error("Coupon idempotency record was not completed");
-    }
-    return batch;
   })();
   map.set(replayKey, { fingerprint, promise });
   try {
@@ -476,7 +507,7 @@ async function issueCouponsWithReplay(
     }
     const replay = await waitForCouponReplay(env, actorUserId, key, fingerprint, input);
     if (replay !== "claimed") return { batch: replay, replayed: true };
-    return issueReservedCoupons(env, replayKey, fingerprint, reservation.existing.id, input, true);
+    return issueReservedCoupons(env, replayKey, fingerprint, reservation.existing.id, input, false);
   }
   return issueReservedCoupons(env, replayKey, fingerprint, reservation.id, input, false);
 }
