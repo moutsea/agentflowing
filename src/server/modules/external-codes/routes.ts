@@ -1,6 +1,7 @@
 import { zValidator } from "@hono/zod-validator";
 import { Hono, type Context } from "hono";
 import { createMiddleware } from "hono/factory";
+import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
 
 import {
@@ -339,6 +340,7 @@ externalCodesRoutes.use("*", protectExternalRequest);
 externalCodesRoutes.route("/redemption-codes", redemptionRoutes);
 externalCodesRoutes.route("/coupons", couponRoutes);
 externalCodesRoutes.onError((error, context) => {
+  if (error instanceof HTTPException && error.status === 400) return validationResponse(context);
   if (error instanceof RateLimitExceededError) {
     context.header("Retry-After", String(error.retryAfterSeconds));
     return context.json(

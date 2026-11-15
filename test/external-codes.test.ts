@@ -145,6 +145,17 @@ describe("external redemption-code API", () => {
     }
   });
 
+  it("returns invalid_request rather than a retryable server error for malformed JSON", async () => {
+    const response = await request("/api/external/redemption-codes", {
+      method: "POST",
+      headers: { ...tokenHeaders(redemptionToken), "content-type": "application/json" },
+      body: '{"credits":',
+    });
+    expect(response.status).toBe(400);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toMatchObject({ error: "invalid_request", messages: { "zh-CN": "请求无效。" } });
+  });
+
   it("replays the original batch with current revoked state consistent with lookup", async () => {
     const issue = () => request("/api/external/redemption-codes", {
       method: "POST",

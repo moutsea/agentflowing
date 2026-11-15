@@ -2,6 +2,7 @@ import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { createMiddleware } from "hono/factory";
+import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
 
 import { requireAuth } from "../../middleware/auth";
@@ -784,6 +785,9 @@ function audit(
 }
 
 function errorResponse(context: Context<AppContext>, error: unknown, objectType: string) {
+  if (error instanceof HTTPException && error.status === 400) {
+    return context.json(invalidRequest, 400, NO_STORE);
+  }
   if (error instanceof RateLimitExceededError) {
     context.header("Retry-After", String(error.retryAfterSeconds));
     return context.json(
