@@ -512,7 +512,7 @@ function AdminCodesManager() {
               type="submit"
               disabled={Boolean(busy) || !search.trim()}
             >
-              <Search size={15} /> {t("Search")}
+              <Search size={15} /> {t("Search a code")}
             </button>
           </form>
           {details ? (

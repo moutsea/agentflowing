@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { AdminCodesPage } from "../../src/client/pages/admin-codes-page";
 import i18n from "../../src/client/i18n";
 import { createTestRoot, type TestRoot } from "./helpers";
+import { ANALYTICS_SOURCE_LABELS } from "../../src/shared/analytics";
 
 vi.mock("../../src/client/workspace", () => ({
   useWorkspace: () => ({ session: { isPlatformAdmin: true } }),
@@ -130,5 +131,50 @@ it.each([500, 409])(
     await act(async () => view.button("Recover original issuance").click());
     expect(requests[1]).toEqual(requests[0]);
     expect(view.container.textContent).toContain("original-batch");
+  },
+);
+
+it.each(["coupons", "redemption-codes"])(
+  "labels the Chinese %s lookup action without changing analytics sources",
+  async (resource) => {
+    await i18n.changeLanguage("zh-CN");
+    const code = resource === "coupons" ? "CBABCDEFGHJK" : "RCABCDEFGHJKLM";
+    const requests: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        requests.push(url);
+        return Response.json({
+          data: url.endsWith("issuance-status")
+            ? {}
+            : {
+                id: "looked-up-code",
+                code,
+                status: "active",
+                rate: 20,
+                credits: 5,
+                expiresAt: "2030-01-01T00:00:00.000Z",
+              },
+        });
+      }),
+    );
+    await view.render(<AdminCodesPage />);
+    if (resource === "redemption-codes")
+      await act(async () =>
+        (view.container.querySelectorAll('[role="tab"]')[1] as HTMLButtonElement).click(),
+      );
+    const input = view.container.querySelector<HTMLInputElement>("#admin-code-search")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, code);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const lookup = view.container.querySelector<HTMLButtonElement>(
+      ".admin-codes-search-form button",
+    )!;
+    expect(lookup.textContent?.trim()).toBe("查询代码");
+    await act(async () => lookup.click());
+    expect(requests).toContain(`/api/admin/${resource}/${code}`);
+    expect(view.container.querySelector(".admin-code-details")?.textContent).toContain(code);
+    expect(i18n.t(ANALYTICS_SOURCE_LABELS.search)).toBe("搜索引擎");
   },
 );

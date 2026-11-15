@@ -29,6 +29,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - T7/F2: share coupon origin protection with QR creation/cancellation before any payment or reservation side effects.
 - T7/F3: preserve coupon checkout reasons and bilingual messages; direct invalid-coupon correction instead of repeating the same failed payment request.
 - T7/F4: preserve existing payment reservation facts after coupon expiry while keeping expired coupons ineligible for preview and new checkout.
+- T7/F5: use the existing code-lookup action label without changing the analytics search-engine source label.
 
 ## [0.1.0] - 2026-08-07
 
