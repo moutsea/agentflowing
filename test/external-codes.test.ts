@@ -145,6 +145,22 @@ describe("external redemption-code API", () => {
     }
   });
 
+  it("replays the original batch with current revoked state consistent with lookup", async () => {
+    const issue = () => request("/api/external/redemption-codes", {
+      method: "POST",
+      headers: { ...tokenHeaders(redemptionToken), "content-type": "application/json", "Idempotency-Key": "revoked-replay" },
+      body: JSON.stringify({ count: 1 }),
+    });
+    const first = await (await issue()).json() as { codes: Array<{ code: string }> };
+    const code = first.codes[0]!.code;
+    await request(`/api/external/redemption-codes/${code}`, { method: "DELETE", headers: tokenHeaders(redemptionToken) });
+    const replay = await (await issue()).json() as { codes: unknown[] };
+    const current = await (await request(`/api/external/redemption-codes/${code}`, { headers: tokenHeaders(redemptionToken) })).json();
+    expect(replay.codes[0]).toEqual(current);
+    expect(replay.codes[0]).toMatchObject({ code, status: "revoked", revokedAt: expect.any(String) });
+    await env.DB.prepare("DELETE FROM redemption_code WHERE idempotency_key = ?").bind("revoked-replay").run();
+  });
+
   it("issues at most 100, replays idempotently, and exposes issuance status", async () => {
     const tooMany = await request("/api/external/redemption-codes", {
       method: "POST",

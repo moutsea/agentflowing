@@ -121,13 +121,13 @@ export type IssueRedemptionCodesParams = {
   now?: Date | number;
 };
 
-export type IssuedRedemptionCodes = Array<typeof redemptionCode.$inferSelect> & {
+export type IssuedRedemptionCodes = Array<RedemptionCodeView> & {
   idempotencyKey: string;
   requestFingerprint: string;
   credits: number;
   count: number;
   validDays: number;
-  codes: Array<typeof redemptionCode.$inferSelect>;
+  codes: Array<RedemptionCodeView>;
 };
 
 export type RedemptionCodeView = typeof redemptionCode.$inferSelect & {
@@ -235,7 +235,7 @@ function formatIssuedBatch(
     validDays: number;
   },
 ): IssuedRedemptionCodes {
-  const batch = rows.slice() as IssuedRedemptionCodes;
+  const batch = rows.map((row) => ({ ...row, status: statusForCode(row) })) as IssuedRedemptionCodes;
   Object.defineProperties(batch, {
     idempotencyKey: { value: params.idempotencyKey, enumerable: false },
     requestFingerprint: { value: params.requestFingerprint, enumerable: false },

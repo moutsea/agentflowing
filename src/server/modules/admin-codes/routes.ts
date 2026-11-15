@@ -955,7 +955,7 @@ adminCodeRoutes.post("/redemption-codes", validateRedemptionIssue, async (contex
       createdBy: context.var.user.id,
     });
     const data = {
-      codes: issued.codes.map((row) => redemptionResponse({ ...row, status: "active" })),
+      codes: issued.codes.map(redemptionResponse),
       count: issued.count,
       credits: issued.credits,
       validDays: issued.validDays,

@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - T7/R2: keep orders and coupon reservations pending when Stripe search has not indexed the payment.
 - T7/R3: persist rediscovered PaymentIntent IDs and continue cancellation/reconciliation for payable intents.
 - T7/R4: redact code-bearing admin/external request paths and hash credential identifiers in error logs.
+- T7/R6: report domain-derived current redemption-code state consistently on issuance replay and lookup.
 
 ## [0.1.0] - 2026-08-07
 

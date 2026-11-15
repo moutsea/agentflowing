@@ -168,7 +168,7 @@ x-request-id: <REQUEST_ID>
 
 ### 发行幂等
 
-`Idempotency-Key` 的参数指纹包含 `credits`、`count`、`validDays`、`note` 和 `source`。同一个 key 搭配相同参数重放会返回完全相同的原批次和 `201`，不会生成第二批；同一个 key 搭配不同参数返回 `409`，错误为 `idempotency_conflict`。并发使用同一个 key 时只有一个事务占用每日额度，其余请求重放已提交的同一批次。没有提供 key 时每次请求都会生成新 key，不能依靠超时重试来去重。
+`Idempotency-Key` 的参数指纹包含 `credits`、`count`、`validDays`、`note` 和 `source`。同一个 key 搭配相同参数重放会返回原批次（代码、顺序、面值及有效期不变）和 `201`，不会生成第二批；状态及兑换/撤销字段反映查询时的当前事实，与 GET 核查一致，不是发行时快照。同一个 key 搭配不同参数返回 `409`，错误为 `idempotency_conflict`。并发使用同一个 key 时只有一个事务占用每日额度，其余请求重放已提交的同一批次。没有提供 key 时每次请求都会生成新 key，不能依靠超时重试来去重。
 
 例如，网络超时后完整重放下面的请求会得到原批次（仍为 `201`）：
 

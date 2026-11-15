@@ -99,7 +99,7 @@ function redemptionCodeResponse(row: RedemptionResponseRow | null) {
   return {
     code: row.code,
     credits: row.credits,
-    status: "status" in row ? row.status : "active",
+    status: row.status,
     expiresAt: isoDate(row.expiresAt),
     redeemedAt: isoDate(row.redeemedAt),
     revokedAt: isoDate(row.revokedAt),

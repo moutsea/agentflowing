@@ -249,6 +249,14 @@ describe("platform admin code management", () => {
     );
     expect(redemptionRevoke.status).toBe(200);
     expect(await redemptionRevoke.json()).toMatchObject({ data: { status: "revoked" } });
+    const revokedReplay = await request("/api/admin/redemption-codes", {
+      method: "POST",
+      headers: headers(user.cookie, { "content-type": "application/json", "Idempotency-Key": "admin-redemption-replay" }),
+      body: JSON.stringify({ credits: 7, count: 2, validDays: 30, source: "test" }),
+    }, requestEnv);
+    expect(await revokedReplay.json()).toMatchObject({
+      data: { codes: [expect.objectContaining({ code: redemptionCode, status: "revoked", revokedAt: expect.any(String) }), expect.any(Object)] },
+    });
   });
 
   it("recovers a pending coupon issuance after the coupon rows already committed", async () => {
