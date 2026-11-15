@@ -94,7 +94,9 @@ export function SettingsPage() {
         setRedemptionPreview(result.valid ? result : null);
         if (!result.valid)
           setRedemptionMessage(
-            result.messages[i18n.resolvedLanguage ?? "en"] ?? result.messages.en,
+            result.messages[i18n.resolvedLanguage ?? "en"] ??
+              result.messages.en ??
+              t("Enter a valid redemption code."),
           );
       }
     } catch (caught) {
