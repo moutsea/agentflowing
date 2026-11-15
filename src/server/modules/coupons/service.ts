@@ -421,12 +421,7 @@ export async function getCouponView(
   value: unknown,
   now: Date | number = Date.now(),
 ): Promise<CouponView | null> {
-  let row: Coupon | null;
-  try {
-    row = await getCouponByCode(env, value);
-  } catch {
-    return null;
-  }
+  const row = await getCouponByCode(env, value);
   if (!row) return null;
   const state = getCouponState(row, now);
   return { ...row, ...state };

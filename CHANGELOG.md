@@ -19,6 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - T7/R4: redact code-bearing admin/external request paths and hash credential identifiers in error logs.
 - T7/R6: report domain-derived current redemption-code state consistently on issuance replay and lookup.
 - T7/R8: preserve malformed-JSON client errors as bilingual 400 invalid_request responses.
+- T7/R9: propagate coupon database failures instead of reporting nonexistent codes.
 
 ## [0.1.0] - 2026-08-07
 

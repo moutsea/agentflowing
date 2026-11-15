@@ -114,6 +114,28 @@ describe("platform admin code management", () => {
     expect(response.headers.get("x-request-id")).toMatch(/^[a-f0-9-]{36}$/);
   });
 
+  it("reports a coupon lookup outage as retryable 500 rather than not_found", async () => {
+    const user = await signIn();
+    const database = new Proxy(env.DB, {
+      get(target, property) {
+        if (property === "prepare") return (sql: string) => {
+          if (/from "coupon"/i.test(sql)) throw new Error("coupon database unavailable");
+          return target.prepare(sql);
+        };
+        const value = Reflect.get(target, property);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const requestEnv = new Proxy(adminEnv(user.userId), {
+      get(target, property) { return property === "DB" ? database : Reflect.get(target, property); },
+    });
+    const response = await request("/api/admin/coupons/CBAAAAAAAAAA", { headers: headers(user.cookie) }, requestEnv);
+    expect(response.status).toBe(500);
+    expect(await response.json()).toMatchObject({ error: "internal_error" });
+    const missing = await request("/api/admin/coupons/CBAAAAAAAAAA", { headers: headers(user.cookie) }, adminEnv(user.userId));
+    expect(missing.status).toBe(404);
+  });
+
   it("issues, queries, revokes, and replays both code types", async () => {
     const user = await signIn();
     const requestEnv = adminEnv(user.userId);
