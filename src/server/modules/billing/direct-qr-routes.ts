@@ -102,7 +102,16 @@ directQrRoutes.post(
       return context.json({ data: result.payment }, 201, NO_STORE);
     } catch (error) {
       if (error instanceof DirectQrError) {
-        return context.json({ error: error.code, message: error.message }, error.status, NO_STORE);
+        return context.json(
+          {
+            error: error.code,
+            reason: error.reason,
+            message: error.message,
+            messages: error.messages,
+          },
+          error.status,
+          NO_STORE,
+        );
       }
       if (error instanceof StripeConfigurationError) {
         return context.json(
@@ -165,7 +174,16 @@ directQrRoutes.get("/:id", requireAuth, requireWorkspaceManager, async (context)
     return context.json({ data: { status } }, 200, NO_STORE);
   } catch (error) {
     if (error instanceof DirectQrError) {
-      return context.json({ error: error.code, message: error.message }, error.status, NO_STORE);
+      return context.json(
+        {
+          error: error.code,
+          reason: error.reason,
+          message: error.message,
+          messages: error.messages,
+        },
+        error.status,
+        NO_STORE,
+      );
     }
     // Talking to Stripe without a key is a configuration problem, not a crash.
     if (error instanceof StripeConfigurationError) {
@@ -201,7 +219,16 @@ directQrRoutes.delete(
       return context.json({ data: { status } }, 200, NO_STORE);
     } catch (error) {
       if (error instanceof DirectQrError) {
-        return context.json({ error: error.code, message: error.message }, error.status, NO_STORE);
+        return context.json(
+          {
+            error: error.code,
+            reason: error.reason,
+            message: error.message,
+            messages: error.messages,
+          },
+          error.status,
+          NO_STORE,
+        );
       }
       // Talking to Stripe without a key is a configuration problem, not a crash.
       if (error instanceof StripeConfigurationError) {

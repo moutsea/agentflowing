@@ -165,3 +165,80 @@ it.each(["expired", "revoked", "already_used"])(
     expect(refreshWorkspace).not.toHaveBeenCalled();
   },
 );
+
+it.each(["en", "zh-CN"])(
+  "shows the %s coupon failure and lets the user remove it before retrying",
+  async (language) => {
+    await i18n.changeLanguage(language);
+    const bodies: Array<Record<string, string>> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/billing/catalog")
+          return Response.json({
+            data: DEFAULT_PLANS.map((plan) => ({
+              ...plan,
+              currency: "usd",
+              checkoutEnabled: true,
+            })),
+          });
+        if (url === "/api/billing/qr" && init?.method !== "POST")
+          return Response.json({
+            data: { enabled: true, canManage: true, currency: "usd", methods: ["wechat_pay"] },
+          });
+        if (url === "/api/billing/qr") {
+          const body = JSON.parse(String(init?.body));
+          bodies.push(body);
+          if (body.couponCode)
+            return Response.json(
+              {
+                error: "coupon_unavailable",
+                reason: "expired",
+                message: "Coupon has expired.",
+                messages: { en: "Coupon has expired.", "zh-CN": "优惠券已过期。" },
+              },
+              { status: 409 },
+            );
+          return Response.json({
+            data: {
+              paymentIntentId: "pi_corrected",
+              method: "wechat_pay",
+              amount: 29,
+              currency: "usd",
+              kind: "qr",
+              qrImage: "data:image/png;base64,AA==",
+            },
+          });
+        }
+        return Response.json({ data: { status: "canceled" } });
+      }),
+    );
+    await view.render(
+      <MemoryRouter>
+        <PricingPage />
+      </MemoryRouter>,
+    );
+    await input(language === "en" ? "Coupon code" : "优惠券代码", "CBABCDEFGHJK");
+    await act(async () =>
+      (view.container.querySelector(".direct-qr-action") as HTMLButtonElement).click(),
+    );
+    const dialog = view.container.querySelector('[role="dialog"]')!;
+    expect(dialog.textContent).toContain(
+      language === "en" ? "Coupon has expired." : "优惠券已过期。",
+    );
+    expect(dialog.textContent).not.toContain(i18n.t("Get a new code"));
+    await act(async () =>
+      view.button(language === "en" ? "Change or remove coupon" : "修改或移除优惠券").click(),
+    );
+    expect(view.container.querySelector('[role="dialog"]')).toBeNull();
+    await input(language === "en" ? "Coupon code" : "优惠券代码", "");
+    await act(async () =>
+      (view.container.querySelector(".direct-qr-action") as HTMLButtonElement).click(),
+    );
+    expect(bodies).toEqual([
+      { planId: "pro", method: "wechat_pay", couponCode: "CBABCDEFGHJK" },
+      { planId: "pro", method: "wechat_pay" },
+    ]);
+    expect(view.container.querySelector('[role="dialog"] img')).not.toBeNull();
+  },
+);

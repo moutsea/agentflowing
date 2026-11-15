@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DirectQrAvailability } from "../src/shared/direct-qr";
 import { app } from "../src/server";
-import { issueCoupon } from "../src/server/modules/coupons/service";
+import { issueCoupon, revokeCoupon } from "../src/server/modules/coupons/service";
 
 const migrationFiles = import.meta.glob("../migrations/*.sql", {
   eager: true,
@@ -259,6 +259,52 @@ describe("direct QR routes", () => {
           .bind(coupon.id)
           .first(),
       ).toMatchObject({ status: "active", reservation_id: null });
+    },
+  );
+
+  it.each(["expired", "revoked"] as const)(
+    "preserves %s coupon reason and bilingual messages",
+    async (reason) => {
+      const owner = await signIn();
+      const coupon = await issueCoupon({
+        env,
+        rate: 20,
+        ...(reason === "expired" ? { validDays: 1, now: Date.now() - 2 * 86400000 } : {}),
+      });
+      if (reason === "revoked") await revokeCoupon(env, coupon.code);
+      const runtime = new Proxy(env, {
+        get(target, key) {
+          if (key === "STRIPE_SECRET_KEY") return "sk_test_coupon_reason";
+          if (key === "STRIPE_PRO_PRICE_ID") return "price_coupon_reason";
+          if (key === "DIRECT_QR_PAYMENT_MODE") return "all";
+          return Reflect.get(target, key);
+        },
+      });
+      const stripe = vi.fn();
+      vi.stubGlobal("fetch", stripe);
+      const response = await app.fetch(
+        new Request(`${env.APP_URL}/api/billing/qr`, {
+          method: "POST",
+          headers: {
+            cookie: owner.cookie,
+            origin: env.APP_URL,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ planId: "pro", method: "wechat_pay", couponCode: coupon.code }),
+        }),
+        runtime,
+        createExecutionContext(),
+      );
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({
+        error: "coupon_unavailable",
+        reason,
+        messages: {
+          en: reason === "expired" ? "Coupon has expired." : "Coupon has been revoked.",
+          "zh-CN": reason === "expired" ? "优惠券已过期。" : "优惠券已撤销。",
+        },
+      });
+      expect(stripe).not.toHaveBeenCalled();
     },
   );
 

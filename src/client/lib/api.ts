@@ -4,6 +4,7 @@ export class ApiError extends Error {
     readonly status: number,
     readonly code?: string,
     readonly messages?: Record<string, string>,
+    readonly reason?: string,
   ) {
     super(message);
     this.name = "ApiError";
@@ -14,6 +15,7 @@ type ErrorPayload = {
   error?: string;
   message?: string;
   messages?: Record<string, string>;
+  reason?: string;
 };
 
 export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
@@ -38,6 +40,7 @@ export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T
       response.status,
       payload.error,
       payload.messages,
+      payload.reason,
     );
   }
   return payload;

@@ -6,6 +6,9 @@ const LANGUAGE_STORAGE_KEY = "agentflowing-language";
 const adminCodesEn = {
   "Manage promotional codes": "Manage promotional codes",
   "Coupon code": "Coupon code",
+  "Change or remove coupon": "Change or remove coupon",
+  "Close this dialog to change or remove the coupon, then start payment again.":
+    "Close this dialog to change or remove the coupon, then start payment again.",
   "Redemption code": "Redemption code",
   "Redeem code": "Redeem code",
   "Recover original issuance": "Recover original issuance",
@@ -95,6 +98,9 @@ const zhCN = {
   ...adminCodesEn,
   "Manage promotional codes": "营销代码管理",
   "Coupon code": "优惠券代码",
+  "Change or remove coupon": "修改或移除优惠券",
+  "Close this dialog to change or remove the coupon, then start payment again.":
+    "关闭此窗口，修改或移除优惠券后重新发起支付。",
   "Redemption code": "兑换码",
   "Redeem code": "兑换",
   "Recover original issuance": "恢复原发行请求",

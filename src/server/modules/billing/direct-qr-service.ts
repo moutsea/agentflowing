@@ -12,6 +12,8 @@ import { readRuntimeString } from "../../env";
 import { isPlatformAdmin } from "../../middleware/platform-admin";
 import { logEvent } from "../../observability";
 import {
+  COUPON_REASON_MESSAGES,
+  type CouponReason,
   getCouponByCode,
   getCouponState,
   isCouponCodeFormat,
@@ -69,9 +71,14 @@ export class DirectQrError extends Error {
       | "not_found",
     message: string,
     readonly status: DirectQrErrorStatus,
+    readonly reason?: CouponReason,
   ) {
     super(message);
     this.name = "DirectQrError";
+  }
+
+  get messages() {
+    return this.reason ? COUPON_REASON_MESSAGES[this.reason] : undefined;
   }
 }
 
@@ -207,10 +214,10 @@ type CouponReservation = {
 
 function couponCheckoutError(
   code: "invalid_coupon" | "coupon_not_found" | "coupon_reserved" | "coupon_unavailable",
-  message: string,
+  reason: CouponReason,
   status: 400 | 404 | 409,
 ) {
-  return new DirectQrError(code, message, status);
+  return new DirectQrError(code, COUPON_REASON_MESSAGES[reason].en, status, reason);
 }
 
 async function loadCouponReservation(params: {
@@ -228,23 +235,23 @@ async function loadCouponReservation(params: {
   if (params.couponCode === undefined) return null;
   const code = normalizeCouponCode(params.couponCode);
   if (!isCouponCodeFormat(code)) {
-    throw couponCheckoutError("invalid_coupon", "Coupon code has an invalid format", 400);
+    throw couponCheckoutError("invalid_coupon", "invalid_code", 400);
   }
   const row = await getCouponByCode(params.env, code);
-  if (!row) throw couponCheckoutError("coupon_not_found", "Coupon was not found", 404);
+  if (!row) throw couponCheckoutError("coupon_not_found", "not_found", 404);
   const now = params.now ?? Math.floor(Date.now() / 1000);
   const state = getCouponState(row, now);
   if (state.status === "expired") {
-    throw couponCheckoutError("coupon_unavailable", "Coupon has expired", 409);
+    throw couponCheckoutError("coupon_unavailable", "expired", 409);
   }
   if (state.status === "revoked") {
-    throw couponCheckoutError("coupon_unavailable", "Coupon has been revoked", 409);
+    throw couponCheckoutError("coupon_unavailable", "revoked", 409);
   }
   if (state.usageState === "redeemed") {
-    throw couponCheckoutError("coupon_unavailable", "Coupon has already been used", 409);
+    throw couponCheckoutError("coupon_unavailable", "already_used", 409);
   }
   if (!state.isAvailable) {
-    throw couponCheckoutError("coupon_reserved", "Coupon is reserved for another payment", 409);
+    throw couponCheckoutError("coupon_reserved", "reserved", 409);
   }
 
   // The direct-QR path currently has one internal coupon candidate. Keeping
@@ -309,10 +316,14 @@ async function loadCouponReservation(params: {
     if (latest) {
       const latestState = getCouponState(latest, now);
       if (latestState.usageState === "reserved") {
-        throw couponCheckoutError("coupon_reserved", "Coupon is reserved for another payment", 409);
+        throw couponCheckoutError("coupon_reserved", "reserved", 409);
       }
       if (latestState.status !== "active") {
-        throw couponCheckoutError("coupon_unavailable", "Coupon is no longer available", 409);
+        throw couponCheckoutError(
+          "coupon_unavailable",
+          latestState.status === "used" ? "already_used" : latestState.status,
+          409,
+        );
       }
     }
     throw error;
