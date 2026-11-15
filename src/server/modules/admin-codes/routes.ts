@@ -132,7 +132,12 @@ type CouponIdempotencyRecord = {
   requestFingerprint: string;
   status: "pending" | "completed";
   batch: string | null;
+  createdAt: number;
+  updatedAt: number;
 };
+
+const COUPON_IDEMPOTENCY_LEASE_SECONDS = 30;
+const COUPON_RECOVERY_WINDOW_SECONDS = 5 * 60;
 
 // The D1 row is the source of truth. This map only joins requests that are
 // already in flight in one isolate; completed batches are always read from D1.
@@ -188,7 +193,12 @@ function deserializeCouponBatch(serialized: string): CouponBatch {
     const restored = { ...row } as Record<string, unknown>;
     for (const field of couponDateFields) {
       const value = restored[field];
-      if (value !== null && value !== undefined) restored[field] = new Date(value as string);
+      if (value !== null && value !== undefined) {
+        const numeric = typeof value === "number" ? value : Number.NaN;
+        restored[field] = Number.isFinite(numeric)
+          ? new Date(numeric > 10_000_000_000 ? numeric : numeric * 1000)
+          : new Date(value as string);
+      }
     }
     return restored;
   }) as CouponBatch;
@@ -203,7 +213,8 @@ function deserializeCouponBatch(serialized: string): CouponBatch {
 
 async function readCouponIdempotency(env: Env, actorUserId: string, key: string) {
   return env.DB.prepare(
-    `SELECT id, request_fingerprint AS requestFingerprint, status, batch
+    `SELECT id, request_fingerprint AS requestFingerprint, status, batch,
+            created_at AS createdAt, updated_at AS updatedAt
        FROM admin_coupon_issuance
       WHERE actor_user_id = ? AND idempotency_key = ?
       LIMIT 1`,
@@ -234,11 +245,132 @@ async function reserveCouponIdempotency(
   return { created: false as const, existing };
 }
 
+function recoveredCouponBatch(
+  rows: Array<Record<string, unknown>>,
+  input: Parameters<typeof issueCoupons>[0],
+) {
+  const batch = rows as CouponBatch;
+  Object.defineProperties(batch, {
+    codes: { value: batch, enumerable: false },
+    rate: { value: input.rate, enumerable: false },
+    count: { value: input.count ?? 1, enumerable: false },
+    validDays: { value: input.validDays ?? 7, enumerable: false },
+  });
+  return batch;
+}
+
+async function recoverCouponBatch(
+  env: Env,
+  actorUserId: string,
+  key: string,
+  fingerprint: string,
+  record: CouponIdempotencyRecord,
+  input: Parameters<typeof issueCoupons>[0],
+) {
+  const note = typeof input.note === "string" ? input.note.trim() || null : (input.note ?? null);
+  const source = typeof input.source === "string" ? input.source.trim() || "admin" : "admin";
+  const recoveryAnchor = Math.max(record.createdAt, record.updatedAt);
+  const lowerCreatedAt = Math.min(record.createdAt, record.updatedAt) - 5;
+  const upperCreatedAt = recoveryAnchor + COUPON_RECOVERY_WINDOW_SECONDS;
+  const notePredicate = note === null ? "note IS NULL" : "note = ?";
+  const bindings: unknown[] = [
+    actorUserId,
+    input.rate * 100,
+    source,
+    lowerCreatedAt,
+    upperCreatedAt,
+  ];
+  if (note !== null) bindings.splice(3, 0, note);
+  const rows = await env.DB.prepare(
+    `SELECT id, code, discount_rate_bps AS discountRateBps, status,
+            expires_at AS expiresAt, reservation_id AS reservationId,
+            reserved_by_user_id AS reservedByUserId,
+            reserved_organization_id AS reservedOrganizationId,
+            reserved_at AS reservedAt,
+            reservation_expires_at AS reservationExpiresAt,
+            redeemed_by_user_id AS redeemedByUserId,
+            redeemed_organization_id AS redeemedOrganizationId,
+            redeemed_at AS redeemedAt, revoked_at AS revokedAt,
+            note, source, created_by AS createdBy, createdAt, updatedAt
+       FROM coupon
+      WHERE created_by = ?
+        AND discount_rate_bps = ?
+        AND source = ?
+        AND ${notePredicate}
+        AND createdAt BETWEEN ? AND ?
+      ORDER BY createdAt ASC, id ASC`,
+  )
+    .bind(...bindings)
+    .all<Record<string, unknown>>();
+
+  const expectedCount = input.count ?? 1;
+  const expectedValidDays = input.validDays ?? 7;
+  const batches = new Map<number, Array<Record<string, unknown>>>();
+  for (const row of rows.results) {
+    const createdAt = Number(row.createdAt);
+    const expiresAt = Number(row.expiresAt);
+    if (!Number.isFinite(createdAt) || expiresAt !== createdAt + expectedValidDays * 86_400) {
+      continue;
+    }
+    const group = batches.get(createdAt) ?? [];
+    group.push(row);
+    batches.set(createdAt, group);
+  }
+  const matchingBatches = [...batches.entries()].filter(
+    ([, group]) => group.length >= expectedCount,
+  );
+  const candidate = matchingBatches.sort(([left], [right]) => {
+    const leftIsAfterReservation = left >= recoveryAnchor;
+    const rightIsAfterReservation = right >= recoveryAnchor;
+    if (leftIsAfterReservation !== rightIsAfterReservation) {
+      return leftIsAfterReservation ? -1 : 1;
+    }
+    return Math.abs(left - recoveryAnchor) - Math.abs(right - recoveryAnchor);
+  })[0]?.[1];
+  if (!candidate) return null;
+
+  const batch = recoveredCouponBatch(candidate.slice(0, expectedCount), input);
+  const serialized = serializeCouponBatch(batch);
+  const completed = await env.DB.prepare(
+    `UPDATE admin_coupon_issuance
+        SET status = 'completed', batch = ?, updated_at = ?
+      WHERE id = ? AND request_fingerprint = ? AND status = 'pending'`,
+  )
+    .bind(serialized, Math.floor(Date.now() / 1000), record.id, fingerprint)
+    .run();
+  if (completed.meta.changes === 1) return deserializeCouponBatch(serialized);
+
+  const latest = await readCouponIdempotency(env, actorUserId, key);
+  if (latest?.status === "completed" && latest.batch) {
+    return deserializeCouponBatch(latest.batch);
+  }
+  return null;
+}
+
+async function claimExpiredCouponIdempotency(
+  env: Env,
+  record: CouponIdempotencyRecord,
+  fingerprint: string,
+) {
+  if (record.updatedAt > Math.floor(Date.now() / 1000) - COUPON_IDEMPOTENCY_LEASE_SECONDS) {
+    return false;
+  }
+  const claimed = await env.DB.prepare(
+    `UPDATE admin_coupon_issuance
+        SET updated_at = ?
+      WHERE id = ? AND request_fingerprint = ? AND status = 'pending' AND updated_at = ?`,
+  )
+    .bind(Math.floor(Date.now() / 1000), record.id, fingerprint, record.updatedAt)
+    .run();
+  return claimed.meta.changes === 1;
+}
+
 async function waitForCouponReplay(
   env: Env,
   actorUserId: string,
   key: string,
   fingerprint: string,
+  input: Parameters<typeof issueCoupons>[0],
 ) {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const existing = await readCouponIdempotency(env, actorUserId, key);
@@ -247,6 +379,9 @@ async function waitForCouponReplay(
     if (existing.status === "completed" && existing.batch) {
       return deserializeCouponBatch(existing.batch);
     }
+    const recovered = await recoverCouponBatch(env, actorUserId, key, fingerprint, existing, input);
+    if (recovered) return recovered;
+    if (await claimExpiredCouponIdempotency(env, existing, fingerprint)) return "claimed" as const;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new AdminIdempotencyInProgressError();
@@ -263,6 +398,56 @@ class AdminIdempotencyInProgressError extends Error {
   constructor() {
     super("The Idempotency-Key is still being processed. Retry shortly.");
     this.name = "AdminIdempotencyInProgressError";
+  }
+}
+
+async function issueReservedCoupons(
+  env: Env,
+  replayKey: string,
+  fingerprint: string,
+  reservationId: string,
+  input: Parameters<typeof issueCoupons>[0],
+  replayed: boolean,
+) {
+  const map = couponReplayMap(env);
+  const promise = (async () => {
+    let batch: CouponBatch;
+    try {
+      batch = await issueCoupons(input);
+      // Persist and return a stable order so a recovered batch is byte-for-byte
+      // identical even though the coupon table has no batch-index column.
+      batch.codes.sort((left, right) => left.id.localeCompare(right.id));
+    } catch (error) {
+      await env.DB.prepare("DELETE FROM admin_coupon_issuance WHERE id = ? AND status = 'pending'")
+        .bind(reservationId)
+        .run();
+      throw error;
+    }
+    const completed = await env.DB.prepare(
+      `UPDATE admin_coupon_issuance
+          SET status = 'completed', batch = ?, updated_at = ?
+        WHERE id = ? AND status = 'pending'`,
+    )
+      .bind(serializeCouponBatch(batch), Math.floor(Date.now() / 1000), reservationId)
+      .run();
+    if (completed.meta.changes !== 1) {
+      const latest = await env.DB.prepare(
+        `SELECT status, batch FROM admin_coupon_issuance WHERE id = ? LIMIT 1`,
+      )
+        .bind(reservationId)
+        .first<{ status: string; batch: string | null }>();
+      if (latest?.status === "completed" && latest.batch)
+        return deserializeCouponBatch(latest.batch);
+      throw new Error("Coupon idempotency record was not completed");
+    }
+    return batch;
+  })();
+  map.set(replayKey, { fingerprint, promise });
+  try {
+    return { batch: await promise, replayed };
+  } finally {
+    const current = map.get(replayKey);
+    if (current?.promise === promise) map.delete(replayKey);
   }
 }
 
@@ -289,38 +474,11 @@ async function issueCouponsWithReplay(
     if (reservation.existing.status === "completed" && reservation.existing.batch) {
       return { batch: deserializeCouponBatch(reservation.existing.batch), replayed: true };
     }
-    return {
-      batch: await waitForCouponReplay(env, actorUserId, key, fingerprint),
-      replayed: true,
-    };
+    const replay = await waitForCouponReplay(env, actorUserId, key, fingerprint, input);
+    if (replay !== "claimed") return { batch: replay, replayed: true };
+    return issueReservedCoupons(env, replayKey, fingerprint, reservation.existing.id, input, true);
   }
-
-  const promise = (async () => {
-    let batch: CouponBatch;
-    try {
-      batch = await issueCoupons(input);
-    } catch (error) {
-      await env.DB.prepare("DELETE FROM admin_coupon_issuance WHERE id = ? AND status = 'pending'")
-        .bind(reservation.id)
-        .run();
-      throw error;
-    }
-    await env.DB.prepare(
-      `UPDATE admin_coupon_issuance
-          SET status = 'completed', batch = ?, updated_at = ?
-        WHERE id = ? AND status = 'pending'`,
-    )
-      .bind(serializeCouponBatch(batch), Math.floor(Date.now() / 1000), reservation.id)
-      .run();
-    return batch;
-  })();
-  map.set(replayKey, { fingerprint, promise });
-  try {
-    return { batch: await promise, replayed: false };
-  } finally {
-    const current = map.get(replayKey);
-    if (current?.promise === promise) map.delete(replayKey);
-  }
+  return issueReservedCoupons(env, replayKey, fingerprint, reservation.id, input, false);
 }
 
 function iso(value: Date | number | null | undefined) {

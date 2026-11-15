@@ -67,7 +67,8 @@ function statusKey(status: CodeStatus) {
 }
 
 const requestErrorTranslations: Record<string, string> = {
-  forbidden: "Invalid request origin",
+  unauthorized: "Sign in is required",
+  forbidden: "Platform administrator access is required",
   rate_limited: "Too many requests. Try again shortly.",
   invalid_request: "Check the issuance fields and try again.",
   invalid_code: "Code has an invalid format.",
@@ -146,12 +147,12 @@ function AdminCodesManager() {
         "/api/admin/redemption-codes/issuance-status",
       );
       setIssuanceStatus(response.data ?? response);
-    } catch {
-      setError(t("Could not load daily issuance"));
+    } catch (caught) {
+      setError(localizedRequestError(caught, t, i18n.resolvedLanguage));
     } finally {
       setLoadingStatus(false);
     }
-  }, [t]);
+  }, [i18n.resolvedLanguage, t]);
 
   useEffect(() => {
     void loadIssuanceStatus();

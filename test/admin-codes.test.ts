@@ -74,6 +74,34 @@ beforeEach(async () => {
 });
 
 describe("platform admin code management", () => {
+  it("returns bilingual authentication errors for the management API", async () => {
+    const unauthenticated = await request(
+      "/api/admin/redemption-codes/issuance-status",
+      { headers: { origin: env.APP_URL } },
+      env,
+    );
+    expect(unauthenticated.status).toBe(401);
+    expect(await unauthenticated.json()).toMatchObject({
+      error: "unauthorized",
+      messages: { en: "Sign in is required", "zh-CN": "请先登录。" },
+    });
+
+    const user = await signIn("Non-platform admin");
+    const forbidden = await request(
+      "/api/admin/redemption-codes/issuance-status",
+      { headers: headers(user.cookie) },
+      env,
+    );
+    expect(forbidden.status).toBe(403);
+    expect(await forbidden.json()).toMatchObject({
+      error: "forbidden",
+      messages: {
+        en: "Platform administrator access is required",
+        "zh-CN": "仅平台管理员可访问",
+      },
+    });
+  });
+
   it("rejects a signed-in workspace user without platform-admin membership", async () => {
     const user = await signIn("Workspace owner");
     const response = await request(
@@ -221,6 +249,134 @@ describe("platform admin code management", () => {
     );
     expect(redemptionRevoke.status).toBe(200);
     expect(await redemptionRevoke.json()).toMatchObject({ data: { status: "revoked" } });
+  });
+
+  it("recovers a pending coupon issuance after the coupon rows already committed", async () => {
+    const user = await signIn("Coupon crash recovery tester");
+    const requestEnv = adminEnv(user.userId);
+    const key = "coupon-crash-recovery";
+    const original = await request(
+      "/api/admin/coupons",
+      {
+        method: "POST",
+        headers: headers(user.cookie, {
+          "content-type": "application/json",
+          "Idempotency-Key": key,
+        }),
+        body: JSON.stringify({ rate: 20, count: 2, validDays: 7 }),
+      },
+      requestEnv,
+    );
+    expect(original.status).toBe(201);
+    const originalBody = (await original.json()) as {
+      data: { codes: Array<{ code: string }> };
+    };
+    const firstCoupon = await env.DB.prepare("SELECT createdAt FROM coupon WHERE code = ? LIMIT 1")
+      .bind(originalBody.data.codes[0]!.code)
+      .first<{ createdAt: number }>();
+    expect(firstCoupon?.createdAt).toEqual(expect.any(Number));
+
+    await env.DB.prepare(
+      `UPDATE admin_coupon_issuance
+          SET status = 'pending', batch = NULL, updated_at = ?
+        WHERE actor_user_id = ? AND idempotency_key = ?`,
+    )
+      .bind(firstCoupon!.createdAt, user.userId, key)
+      .run();
+
+    const replay = await request(
+      "/api/admin/coupons",
+      {
+        method: "POST",
+        headers: headers(user.cookie, {
+          "content-type": "application/json",
+          "Idempotency-Key": key,
+        }),
+        body: JSON.stringify({ rate: 20, count: 2, validDays: 7 }),
+      },
+      adminEnv(user.userId),
+    );
+    expect(replay.status).toBe(201);
+    const replayBody = (await replay.json()) as {
+      data: { codes: Array<{ code: string }>; idempotentReplay: boolean };
+    };
+    expect(replayBody.data.codes).toEqual(originalBody.data.codes);
+    expect(replayBody.data.idempotentReplay).toBe(true);
+
+    const couponCount = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM coupon WHERE created_by = ?",
+    )
+      .bind(user.userId)
+      .first<{ count: number }>();
+    expect(couponCount?.count).toBe(2);
+    const record = await env.DB.prepare(
+      "SELECT status, batch FROM admin_coupon_issuance WHERE actor_user_id = ? AND idempotency_key = ?",
+    )
+      .bind(user.userId, key)
+      .first<{ status: string; batch: string | null }>();
+    expect(record).toMatchObject({ status: "completed" });
+    expect(record?.batch).toContain(originalBody.data.codes[0]!.code);
+
+    const conflict = await request(
+      "/api/admin/coupons",
+      {
+        method: "POST",
+        headers: headers(user.cookie, {
+          "content-type": "application/json",
+          "Idempotency-Key": key,
+        }),
+        body: JSON.stringify({ rate: 25, count: 2, validDays: 7 }),
+      },
+      adminEnv(user.userId),
+    );
+    expect(conflict.status).toBe(409);
+    expect(await conflict.json()).toMatchObject({ error: "idempotency_conflict" });
+  });
+
+  it("reclaims an expired pending coupon issuance lease", async () => {
+    const user = await signIn("Coupon lease recovery tester");
+    const requestEnv = adminEnv(user.userId);
+    const key = "coupon-expired-lease";
+    const fingerprint = JSON.stringify({
+      rate: 15,
+      count: 1,
+      validDays: 7,
+      note: null,
+      source: "admin",
+    });
+    const expiredAt = Math.floor(Date.now() / 1000) - 120;
+    await env.DB.prepare(
+      `INSERT INTO admin_coupon_issuance
+         (id, actor_user_id, idempotency_key, request_fingerprint, status, batch, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'pending', NULL, ?, ?)`,
+    )
+      .bind(crypto.randomUUID(), user.userId, key, fingerprint, expiredAt, expiredAt)
+      .run();
+
+    const response = await request(
+      "/api/admin/coupons",
+      {
+        method: "POST",
+        headers: headers(user.cookie, {
+          "content-type": "application/json",
+          "Idempotency-Key": key,
+        }),
+        body: JSON.stringify({ rate: 15, count: 1, validDays: 7 }),
+      },
+      requestEnv,
+    );
+    expect(response.status).toBe(201);
+    const responseBody = (await response.json()) as {
+      data: { codes: Array<{ code: string }> };
+    };
+    expect(responseBody.data.codes).toHaveLength(1);
+    const record = await env.DB.prepare(
+      "SELECT status, batch FROM admin_coupon_issuance WHERE actor_user_id = ? AND idempotency_key = ?",
+    )
+      .bind(user.userId, key)
+      .first<{ status: string; batch: string | null }>();
+    expect(record?.status).toBe("completed");
+    expect(record?.batch).not.toBeNull();
   });
 
   it("writes audit fields without logging the issued codes", async () => {

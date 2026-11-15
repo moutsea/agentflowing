@@ -15,7 +15,14 @@ export function isPlatformAdmin(env: object, userId: string) {
 export const requirePlatformAdmin = createMiddleware<AppContext>(async (context, next) => {
   if (!isPlatformAdmin(context.env, context.var.user.id)) {
     return context.json(
-      { error: "forbidden", message: "Platform administrator access is required" },
+      {
+        error: "forbidden",
+        message: "Platform administrator access is required",
+        messages: {
+          en: "Platform administrator access is required",
+          "zh-CN": "仅平台管理员可访问",
+        },
+      },
       403,
     );
   }
