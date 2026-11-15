@@ -138,7 +138,11 @@ export function DirectQrDialog({
         ? previous.request
         : apiRequest<{ data: DirectQrPayment }>("/api/billing/qr", {
             method: "POST",
-            body: JSON.stringify({ planId, method, ...(couponCode ? { couponCode } : {}) } satisfies DirectQrCreateRequest),
+            body: JSON.stringify({
+              planId,
+              method,
+              ...(couponCode ? { couponCode } : {}),
+            } satisfies DirectQrCreateRequest),
           }).then(({ data }) => data);
     if (!previous || previous.key !== key) createdRef.current = { key, request };
 

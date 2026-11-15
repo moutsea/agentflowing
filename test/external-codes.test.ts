@@ -133,8 +133,20 @@ describe("external redemption-code API", () => {
     try {
       const path = `/api/external/coupons/${coupon.code}`;
       expect((await request(path, { headers: tokenHeaders(couponToken) })).status).toBe(200);
-      const brokenDb = { prepare: () => { throw new Error("database unavailable"); } };
-      expect((await request(path, { headers: tokenHeaders(couponToken) }, configuredEnv({ DB: brokenDb }))).status).toBe(500);
+      const brokenDb = {
+        prepare: () => {
+          throw new Error("database unavailable");
+        },
+      };
+      expect(
+        (
+          await request(
+            path,
+            { headers: tokenHeaders(couponToken) },
+            configuredEnv({ DB: brokenDb }),
+          )
+        ).status,
+      ).toBe(500);
       const logs = JSON.stringify([...info.mock.calls, ...errors.mock.calls]);
       expect(logs).toContain("request.completed");
       expect(logs).toContain("external_codes.request_failed");
@@ -153,23 +165,44 @@ describe("external redemption-code API", () => {
     });
     expect(response.status).toBe(400);
     expect(response.headers.get("cache-control")).toBe("no-store");
-    expect(await response.json()).toMatchObject({ error: "invalid_request", messages: { "zh-CN": "请求无效。" } });
+    expect(await response.json()).toMatchObject({
+      error: "invalid_request",
+      messages: { "zh-CN": "请求无效。" },
+    });
   });
 
   it("replays the original batch with current revoked state consistent with lookup", async () => {
-    const issue = () => request("/api/external/redemption-codes", {
-      method: "POST",
-      headers: { ...tokenHeaders(redemptionToken), "content-type": "application/json", "Idempotency-Key": "revoked-replay" },
-      body: JSON.stringify({ count: 1 }),
-    });
-    const first = await (await issue()).json() as { codes: Array<{ code: string }> };
+    const issue = () =>
+      request("/api/external/redemption-codes", {
+        method: "POST",
+        headers: {
+          ...tokenHeaders(redemptionToken),
+          "content-type": "application/json",
+          "Idempotency-Key": "revoked-replay",
+        },
+        body: JSON.stringify({ count: 1 }),
+      });
+    const first = (await (await issue()).json()) as { codes: Array<{ code: string }> };
     const code = first.codes[0]!.code;
-    await request(`/api/external/redemption-codes/${code}`, { method: "DELETE", headers: tokenHeaders(redemptionToken) });
-    const replay = await (await issue()).json() as { codes: unknown[] };
-    const current = await (await request(`/api/external/redemption-codes/${code}`, { headers: tokenHeaders(redemptionToken) })).json();
+    await request(`/api/external/redemption-codes/${code}`, {
+      method: "DELETE",
+      headers: tokenHeaders(redemptionToken),
+    });
+    const replay = (await (await issue()).json()) as { codes: unknown[] };
+    const current = await (
+      await request(`/api/external/redemption-codes/${code}`, {
+        headers: tokenHeaders(redemptionToken),
+      })
+    ).json();
     expect(replay.codes[0]).toEqual(current);
-    expect(replay.codes[0]).toMatchObject({ code, status: "revoked", revokedAt: expect.any(String) });
-    await env.DB.prepare("DELETE FROM redemption_code WHERE idempotency_key = ?").bind("revoked-replay").run();
+    expect(replay.codes[0]).toMatchObject({
+      code,
+      status: "revoked",
+      revokedAt: expect.any(String),
+    });
+    await env.DB.prepare("DELETE FROM redemption_code WHERE idempotency_key = ?")
+      .bind("revoked-replay")
+      .run();
   });
 
   it("issues at most 100, replays idempotently, and exposes issuance status", async () => {

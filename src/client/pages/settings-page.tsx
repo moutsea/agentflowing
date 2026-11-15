@@ -65,7 +65,10 @@ export function SettingsPage() {
   const [copied, setCopied] = useState(false);
   const [redemptionCode, setRedemptionCode] = useState("");
   const [redemptionMessage, setRedemptionMessage] = useState("");
-  const [redemptionPreview, setRedemptionPreview] = useState<{ credits: number; expiresAt: string } | null>(null);
+  const [redemptionPreview, setRedemptionPreview] = useState<{
+    credits: number;
+    expiresAt: string;
+  } | null>(null);
   const redeemCode = async (redeem: boolean) => {
     if (busy || !redemptionCode.trim()) return;
     setBusy("redemption");
@@ -73,8 +76,13 @@ export function SettingsPage() {
     try {
       const body = JSON.stringify({ code: redemptionCode.trim() });
       if (redeem) {
-        const { data } = await apiRequest<{ data: { credits: number; balance: number } }>("/api/billing/redemption-codes/redeem", { method: "POST", body });
-        setRedemptionMessage(`${t("Redemption succeeded")} · ${t("Balance updated: {{balance}} credits", { balance: data.balance })}`);
+        const { data } = await apiRequest<{ data: { credits: number; balance: number } }>(
+          "/api/billing/redemption-codes/redeem",
+          { method: "POST", body },
+        );
+        setRedemptionMessage(
+          `${t("Redemption succeeded")} · ${t("Balance updated: {{balance}} credits", { balance: data.balance })}`,
+        );
         setRedemptionPreview(null);
         setRedemptionCode("");
         await refreshWorkspace();
@@ -84,12 +92,17 @@ export function SettingsPage() {
           | { valid: false; messages: Record<string, string> }
         >("/api/billing/redemption-codes/validate", { method: "POST", body });
         setRedemptionPreview(result.valid ? result : null);
-        if (!result.valid) setRedemptionMessage(result.messages[i18n.resolvedLanguage ?? "en"] ?? result.messages.en);
+        if (!result.valid)
+          setRedemptionMessage(
+            result.messages[i18n.resolvedLanguage ?? "en"] ?? result.messages.en,
+          );
       }
     } catch (caught) {
-      setRedemptionMessage(caught instanceof ApiError
-        ? caught.messages?.[i18n.resolvedLanguage ?? "en"] ?? caught.message
-        : t("Network error. Try again."));
+      setRedemptionMessage(
+        caught instanceof ApiError
+          ? (caught.messages?.[i18n.resolvedLanguage ?? "en"] ?? caught.message)
+          : t("Network error. Try again."),
+      );
     } finally {
       setBusy("");
     }
@@ -297,18 +310,50 @@ export function SettingsPage() {
 
         <article className="panel settings-card">
           <h2>{t("Redemption codes")}</h2>
-          <form className="form-section" onSubmit={(event) => { event.preventDefault(); void redeemCode(false); }}>
+          <form
+            className="form-section"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void redeemCode(false);
+            }}
+          >
             <label>
               <span>{t("Redemption code")}</span>
-              <input aria-label={t("Redemption code")} value={redemptionCode} disabled={Boolean(busy)}
-                onChange={(event) => { setRedemptionCode(event.target.value); setRedemptionPreview(null); setRedemptionMessage(""); }} />
+              <input
+                aria-label={t("Redemption code")}
+                value={redemptionCode}
+                disabled={Boolean(busy)}
+                onChange={(event) => {
+                  setRedemptionCode(event.target.value);
+                  setRedemptionPreview(null);
+                  setRedemptionMessage("");
+                }}
+              />
             </label>
             <div className="settings-actions">
-              <button className="button button-light" type="submit" disabled={Boolean(busy) || !redemptionCode.trim()}>{t("Redemption preview")}</button>
-              <button className="button button-dark" type="button" disabled={Boolean(busy) || !redemptionPreview} onClick={() => void redeemCode(true)}>{t("Redeem code")}</button>
+              <button
+                className="button button-light"
+                type="submit"
+                disabled={Boolean(busy) || !redemptionCode.trim()}
+              >
+                {t("Redemption preview")}
+              </button>
+              <button
+                className="button button-dark"
+                type="button"
+                disabled={Boolean(busy) || !redemptionPreview}
+                onClick={() => void redeemCode(true)}
+              >
+                {t("Redeem code")}
+              </button>
             </div>
           </form>
-          {redemptionPreview && <p role="status">{redemptionPreview.credits} {t("Credits")} · {t("Expires")}: {formatDate(redemptionPreview.expiresAt)}</p>}
+          {redemptionPreview && (
+            <p role="status">
+              {redemptionPreview.credits} {t("Credits")} · {t("Expires")}:{" "}
+              {formatDate(redemptionPreview.expiresAt)}
+            </p>
+          )}
           {redemptionMessage && <p role="status">{redemptionMessage}</p>}
         </article>
 

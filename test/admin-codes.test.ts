@@ -118,21 +118,32 @@ describe("platform admin code management", () => {
     const user = await signIn();
     const database = new Proxy(env.DB, {
       get(target, property) {
-        if (property === "prepare") return (sql: string) => {
-          if (/from "coupon"/i.test(sql)) throw new Error("coupon database unavailable");
-          return target.prepare(sql);
-        };
+        if (property === "prepare")
+          return (sql: string) => {
+            if (/from "coupon"/i.test(sql)) throw new Error("coupon database unavailable");
+            return target.prepare(sql);
+          };
         const value = Reflect.get(target, property);
         return typeof value === "function" ? value.bind(target) : value;
       },
     });
     const requestEnv = new Proxy(adminEnv(user.userId), {
-      get(target, property) { return property === "DB" ? database : Reflect.get(target, property); },
+      get(target, property) {
+        return property === "DB" ? database : Reflect.get(target, property);
+      },
     });
-    const response = await request("/api/admin/coupons/CBAAAAAAAAAA", { headers: headers(user.cookie) }, requestEnv);
+    const response = await request(
+      "/api/admin/coupons/CBAAAAAAAAAA",
+      { headers: headers(user.cookie) },
+      requestEnv,
+    );
     expect(response.status).toBe(500);
     expect(await response.json()).toMatchObject({ error: "internal_error" });
-    const missing = await request("/api/admin/coupons/CBAAAAAAAAAA", { headers: headers(user.cookie) }, adminEnv(user.userId));
+    const missing = await request(
+      "/api/admin/coupons/CBAAAAAAAAAA",
+      { headers: headers(user.cookie) },
+      adminEnv(user.userId),
+    );
     expect(missing.status).toBe(404);
   });
 
@@ -271,13 +282,29 @@ describe("platform admin code management", () => {
     );
     expect(redemptionRevoke.status).toBe(200);
     expect(await redemptionRevoke.json()).toMatchObject({ data: { status: "revoked" } });
-    const revokedReplay = await request("/api/admin/redemption-codes", {
-      method: "POST",
-      headers: headers(user.cookie, { "content-type": "application/json", "Idempotency-Key": "admin-redemption-replay" }),
-      body: JSON.stringify({ credits: 7, count: 2, validDays: 30, source: "test" }),
-    }, requestEnv);
+    const revokedReplay = await request(
+      "/api/admin/redemption-codes",
+      {
+        method: "POST",
+        headers: headers(user.cookie, {
+          "content-type": "application/json",
+          "Idempotency-Key": "admin-redemption-replay",
+        }),
+        body: JSON.stringify({ credits: 7, count: 2, validDays: 30, source: "test" }),
+      },
+      requestEnv,
+    );
     expect(await revokedReplay.json()).toMatchObject({
-      data: { codes: [expect.objectContaining({ code: redemptionCode, status: "revoked", revokedAt: expect.any(String) }), expect.any(Object)] },
+      data: {
+        codes: [
+          expect.objectContaining({
+            code: redemptionCode,
+            status: "revoked",
+            revokedAt: expect.any(String),
+          }),
+          expect.any(Object),
+        ],
+      },
     });
   });
 

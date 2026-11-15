@@ -647,8 +647,12 @@ describe("direct QR coupon checkout", () => {
         env: configuredEnv(),
         stripe: {
           paymentIntents: {
-            cancel: async () => { throw new Error("missing provider id"); },
-            retrieve: async () => { throw new Error("missing provider id"); },
+            cancel: async () => {
+              throw new Error("missing provider id");
+            },
+            retrieve: async () => {
+              throw new Error("missing provider id");
+            },
             search: async () => ({ data: [] }),
           },
         },
@@ -688,14 +692,22 @@ describe("direct QR coupon checkout", () => {
     const workspace = await seedWorkspace();
     const coupon = await issueCoupon({ env, rate: 20 });
     const checkout = await createDirectQrCheckout({
-      env: configuredEnv(), ...workspace,
+      env: configuredEnv(),
+      ...workspace,
       userEmail: `${workspace.userId}@example.com`,
-      planId: "pro", method: "wechat_pay", appUrl: env.APP_URL, couponCode: coupon.code,
+      planId: "pro",
+      method: "wechat_pay",
+      appUrl: env.APP_URL,
+      couponCode: coupon.code,
     });
     const intent = stripe.created[0]!.intent;
     await env.DB.prepare(`UPDATE "order" SET provider_session_id = NULL,
-      createdAt = unixepoch() - 7200 WHERE id = ?`).bind(checkout.orderId).run();
-    const cancel = vi.fn().mockRejectedValueOnce(new Error("cancel timeout"))
+      createdAt = unixepoch() - 7200 WHERE id = ?`)
+      .bind(checkout.orderId)
+      .run();
+    const cancel = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("cancel timeout"))
       .mockResolvedValue({ status: "canceled" });
     const search = vi.fn(async () => ({ data: [intent] }));
     const recoveryStripe = { paymentIntents: { cancel, search, retrieve: async () => intent } };

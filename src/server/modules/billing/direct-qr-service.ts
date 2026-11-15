@@ -1044,7 +1044,9 @@ async function sweepDirectQrOrder(
     await env.DB.prepare(
       `UPDATE "order" SET provider_session_id = ?, updatedAt = unixepoch()
        WHERE id = ? AND provider_session_id IS NULL`,
-    ).bind(intent.id, candidate.id).run();
+    )
+      .bind(intent.id, candidate.id)
+      .run();
     candidate.paymentIntentId = intent.id;
     if (intent.status === "succeeded") {
       await fulfillDirectQrIntent(env, intent);

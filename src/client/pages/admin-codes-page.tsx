@@ -127,8 +127,12 @@ export function AdminCodesPage() {
 function AdminCodesManager() {
   const { t, i18n } = useTranslation();
   const [kind, setKind] = useState<CodeKind>("coupon");
-  const [couponPending, setCouponPending] = useState(() => storedIssuance<typeof emptyCoupon>("admin-coupon-issuance-request"));
-  const [redemptionPending, setRedemptionPending] = useState(() => storedIssuance<typeof emptyRedemption>("admin-redemption-issuance-request"));
+  const [couponPending, setCouponPending] = useState(() =>
+    storedIssuance<typeof emptyCoupon>("admin-coupon-issuance-request"),
+  );
+  const [redemptionPending, setRedemptionPending] = useState(() =>
+    storedIssuance<typeof emptyRedemption>("admin-redemption-issuance-request"),
+  );
   const [couponForm, setCouponForm] = useState(couponPending?.form ?? emptyCoupon);
   const [redemptionForm, setRedemptionForm] = useState(redemptionPending?.form ?? emptyRedemption);
   const [issuanceStatus, setIssuanceStatus] = useState<IssuanceStatus | null>(null);
@@ -169,12 +173,22 @@ function AdminCodesManager() {
     setDetails(null);
     try {
       const isCoupon = kind === "coupon";
-      const storageKey = isCoupon ? "admin-coupon-issuance-request" : "admin-redemption-issuance-request";
+      const storageKey = isCoupon
+        ? "admin-coupon-issuance-request"
+        : "admin-redemption-issuance-request";
       const original = pending ?? {
         key: crypto.randomUUID(),
         form: isCoupon
-          ? { ...couponForm, note: couponForm.note.trim(), source: couponForm.source.trim() || "admin" }
-          : { ...redemptionForm, note: redemptionForm.note.trim(), source: redemptionForm.source.trim() || "admin" },
+          ? {
+              ...couponForm,
+              note: couponForm.note.trim(),
+              source: couponForm.source.trim() || "admin",
+            }
+          : {
+              ...redemptionForm,
+              note: redemptionForm.note.trim(),
+              source: redemptionForm.source.trim() || "admin",
+            },
       };
       if (isCoupon) setCouponPending(original as PendingIssuance<typeof emptyCoupon>);
       else setRedemptionPending(original as PendingIssuance<typeof emptyRedemption>);
@@ -443,13 +457,17 @@ function AdminCodesManager() {
               />
             </label>
           </fieldset>
-            <button
-              className="button button-dark admin-codes-submit"
-              type="submit"
-              disabled={Boolean(busy)}
-            >
-              {busy === "issue" ? t("Issuing…") : pending ? t("Recover original issuance") : t("Issue codes")}
-            </button>
+          <button
+            className="button button-dark admin-codes-submit"
+            type="submit"
+            disabled={Boolean(busy)}
+          >
+            {busy === "issue"
+              ? t("Issuing…")
+              : pending
+                ? t("Recover original issuance")
+                : t("Issue codes")}
+          </button>
         </form>
 
         <section className="panel admin-codes-search">
