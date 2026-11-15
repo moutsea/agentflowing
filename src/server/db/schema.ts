@@ -322,6 +322,33 @@ export const coupon = sqliteTable(
   ],
 );
 
+export const adminCouponIssuance = sqliteTable(
+  "admin_coupon_issuance",
+  {
+    id: text("id").primaryKey(),
+    actorUserId: text("actor_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    idempotencyKey: text("idempotency_key").notNull(),
+    requestFingerprint: text("request_fingerprint").notNull(),
+    status: text("status", { enum: ["pending", "completed"] })
+      .notNull()
+      .default("pending"),
+    batch: text("batch"),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .default(sql`(unixepoch())`)
+      .notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp" })
+      .default(sql`(unixepoch())`)
+      .$onUpdate(() => new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("admin_coupon_issuance_actor_key_uidx").on(table.actorUserId, table.idempotencyKey),
+    index("admin_coupon_issuance_status_idx").on(table.status),
+  ],
+);
+
 export const redemptionCode = sqliteTable(
   "redemption_code",
   {
@@ -638,6 +665,7 @@ export const schema = {
   account,
   agent,
   agentRun,
+  adminCouponIssuance,
   analyticsVisit,
   apiKey,
   chat,
@@ -668,6 +696,7 @@ export type Organization = typeof organization.$inferSelect;
 export type Agent = typeof agent.$inferSelect;
 export type Chat = typeof chat.$inferSelect;
 export type Coupon = typeof coupon.$inferSelect;
+export type AdminCouponIssuance = typeof adminCouponIssuance.$inferSelect;
 export type CreditLedgerEntry = typeof creditLedger.$inferSelect;
 export type FileAsset = typeof fileAsset.$inferSelect;
 export type RedemptionCode = typeof redemptionCode.$inferSelect;

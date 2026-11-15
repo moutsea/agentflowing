@@ -124,14 +124,18 @@ class AdminIdempotencyConflictError extends Error {
 type CouponBatch = Awaited<ReturnType<typeof issueCoupons>>;
 type CouponReplay = {
   fingerprint: string;
-  createdAt: number;
   promise: Promise<CouponBatch>;
 };
 
-// Coupon rows predate an idempotency column. Keep the replay boundary scoped to
-// the D1 binding so tests, local databases, and separate Worker isolates cannot
-// accidentally replay a batch from another database. The client also disables
-// duplicate submission; this cache covers an in-flight retry in one isolate.
+type CouponIdempotencyRecord = {
+  id: string;
+  requestFingerprint: string;
+  status: "pending" | "completed";
+  batch: string | null;
+};
+
+// The D1 row is the source of truth. This map only joins requests that are
+// already in flight in one isolate; completed batches are always read from D1.
 const couponReplayByDatabase = new WeakMap<object, Map<string, CouponReplay>>();
 
 function couponReplayMap(env: Env) {
@@ -154,6 +158,114 @@ function issueFingerprint(input: Record<string, unknown>) {
   });
 }
 
+const couponDateFields = [
+  "expiresAt",
+  "reservedAt",
+  "reservationExpiresAt",
+  "redeemedAt",
+  "revokedAt",
+  "createdAt",
+  "updatedAt",
+] as const;
+
+function serializeCouponBatch(batch: CouponBatch) {
+  return JSON.stringify({
+    rows: batch.codes,
+    rate: batch.rate,
+    count: batch.count,
+    validDays: batch.validDays,
+  });
+}
+
+function deserializeCouponBatch(serialized: string): CouponBatch {
+  const parsed = JSON.parse(serialized) as {
+    rows: Array<Record<string, unknown>>;
+    rate: number;
+    count: number;
+    validDays: number;
+  };
+  const rows = parsed.rows.map((row) => {
+    const restored = { ...row } as Record<string, unknown>;
+    for (const field of couponDateFields) {
+      const value = restored[field];
+      if (value !== null && value !== undefined) restored[field] = new Date(value as string);
+    }
+    return restored;
+  }) as CouponBatch;
+  Object.defineProperties(rows, {
+    codes: { value: rows, enumerable: false },
+    rate: { value: parsed.rate, enumerable: false },
+    count: { value: parsed.count, enumerable: false },
+    validDays: { value: parsed.validDays, enumerable: false },
+  });
+  return rows;
+}
+
+async function readCouponIdempotency(env: Env, actorUserId: string, key: string) {
+  return env.DB.prepare(
+    `SELECT id, request_fingerprint AS requestFingerprint, status, batch
+       FROM admin_coupon_issuance
+      WHERE actor_user_id = ? AND idempotency_key = ?
+      LIMIT 1`,
+  )
+    .bind(actorUserId, key)
+    .first<CouponIdempotencyRecord>();
+}
+
+async function reserveCouponIdempotency(
+  env: Env,
+  actorUserId: string,
+  key: string,
+  fingerprint: string,
+) {
+  const id = crypto.randomUUID();
+  const now = Math.floor(Date.now() / 1000);
+  const result = await env.DB.prepare(
+    `INSERT INTO admin_coupon_issuance
+       (id, actor_user_id, idempotency_key, request_fingerprint, status, batch, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'pending', NULL, ?, ?)
+     ON CONFLICT(actor_user_id, idempotency_key) DO NOTHING`,
+  )
+    .bind(id, actorUserId, key, fingerprint, now, now)
+    .run();
+  if (result.meta.changes === 1) return { created: true as const, id };
+  const existing = await readCouponIdempotency(env, actorUserId, key);
+  if (!existing) throw new Error("Coupon idempotency record disappeared");
+  return { created: false as const, existing };
+}
+
+async function waitForCouponReplay(
+  env: Env,
+  actorUserId: string,
+  key: string,
+  fingerprint: string,
+) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const existing = await readCouponIdempotency(env, actorUserId, key);
+    if (!existing) throw new Error("Coupon idempotency record disappeared");
+    if (existing.requestFingerprint !== fingerprint) throw new AdminIdempotencyConflictError();
+    if (existing.status === "completed" && existing.batch) {
+      return deserializeCouponBatch(existing.batch);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new AdminIdempotencyInProgressError();
+}
+
+class AdminIdempotencyInProgressError extends Error {
+  readonly status = 409 as const;
+  readonly reason = "idempotency_in_progress" as const;
+  readonly messages = {
+    en: "The Idempotency-Key is still being processed. Retry shortly.",
+    "zh-CN": "Idempotency-Key 仍在处理中，请稍后重试。",
+  } as const;
+
+  constructor() {
+    super("The Idempotency-Key is still being processed. Retry shortly.");
+    this.name = "AdminIdempotencyInProgressError";
+  }
+}
+
 async function issueCouponsWithReplay(
   env: Env,
   key: string | undefined,
@@ -165,18 +277,50 @@ async function issueCouponsWithReplay(
   const fingerprint = issueFingerprint(input as unknown as Record<string, unknown>);
   const map = couponReplayMap(env);
   const existing = map.get(replayKey);
-  if (existing && Date.now() - existing.createdAt < 15 * 60 * 1000) {
+  if (existing) {
     if (existing.fingerprint !== fingerprint) throw new AdminIdempotencyConflictError();
     return { batch: await existing.promise, replayed: true };
   }
-  map.delete(replayKey);
-  const promise = issueCoupons(input);
-  map.set(replayKey, { fingerprint, createdAt: Date.now(), promise });
-  promise.catch(() => {
+  const reservation = await reserveCouponIdempotency(env, actorUserId, key, fingerprint);
+  if (!reservation.created) {
+    if (reservation.existing.requestFingerprint !== fingerprint) {
+      throw new AdminIdempotencyConflictError();
+    }
+    if (reservation.existing.status === "completed" && reservation.existing.batch) {
+      return { batch: deserializeCouponBatch(reservation.existing.batch), replayed: true };
+    }
+    return {
+      batch: await waitForCouponReplay(env, actorUserId, key, fingerprint),
+      replayed: true,
+    };
+  }
+
+  const promise = (async () => {
+    let batch: CouponBatch;
+    try {
+      batch = await issueCoupons(input);
+    } catch (error) {
+      await env.DB.prepare("DELETE FROM admin_coupon_issuance WHERE id = ? AND status = 'pending'")
+        .bind(reservation.id)
+        .run();
+      throw error;
+    }
+    await env.DB.prepare(
+      `UPDATE admin_coupon_issuance
+          SET status = 'completed', batch = ?, updated_at = ?
+        WHERE id = ? AND status = 'pending'`,
+    )
+      .bind(serializeCouponBatch(batch), Math.floor(Date.now() / 1000), reservation.id)
+      .run();
+    return batch;
+  })();
+  map.set(replayKey, { fingerprint, promise });
+  try {
+    return { batch: await promise, replayed: false };
+  } finally {
     const current = map.get(replayKey);
     if (current?.promise === promise) map.delete(replayKey);
-  });
-  return { batch: await promise, replayed: false };
+  }
 }
 
 function iso(value: Date | number | null | undefined) {
@@ -305,7 +449,8 @@ function errorResponse(context: Context<AppContext>, error: unknown, objectType:
     error instanceof RedemptionCodeValidationError ||
     error instanceof RedemptionCodeDailyCapError ||
     error instanceof RedemptionCodeIdempotencyConflictError ||
-    error instanceof AdminIdempotencyConflictError
+    error instanceof AdminIdempotencyConflictError ||
+    error instanceof AdminIdempotencyInProgressError
   ) {
     return context.json(
       {

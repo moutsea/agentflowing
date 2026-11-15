@@ -61,9 +61,18 @@ const adminCodesEn = {
   "Could not copy code": "Could not copy code",
   "Could not load daily issuance": "Could not load daily issuance",
   "Network error. Try again.": "Network error. Try again.",
+  "Invalid request origin": "Invalid request origin",
+  "Too many requests. Try again shortly.": "Too many requests. Try again shortly.",
   "Check the issuance fields and try again.": "Check the issuance fields and try again.",
+  "Code has an invalid format.": "Code has an invalid format.",
+  "Code is reserved for another payment.": "Code is reserved for another payment.",
+  "Code is temporarily unavailable.": "Code is temporarily unavailable.",
   "The Idempotency-Key was already used with different parameters.":
     "The Idempotency-Key was already used with different parameters.",
+  "The Idempotency-Key is still being processed. Retry shortly.":
+    "The Idempotency-Key is still being processed. Retry shortly.",
+  "The request could not be completed. Try again.":
+    "The request could not be completed. Try again.",
   "Enter a valid coupon code.": "Enter a valid coupon code.",
   "Enter a valid redemption code.": "Enter a valid redemption code.",
   "Coupon preview": "Coupon preview",
@@ -131,9 +140,17 @@ const zhCN = {
   "Could not copy code": "无法复制代码",
   "Could not load daily issuance": "无法加载每日发行额度",
   "Network error. Try again.": "网络错误，请重试。",
+  "Invalid request origin": "请求来源无效。",
+  "Too many requests. Try again shortly.": "请求过于频繁，请稍后重试。",
   "Check the issuance fields and try again.": "请检查发码参数后重试。",
+  "Code has an invalid format.": "代码格式无效。",
+  "Code is reserved for another payment.": "代码已被其他支付预留。",
+  "Code is temporarily unavailable.": "代码暂时不可用。",
   "The Idempotency-Key was already used with different parameters.":
     "Idempotency-Key 已用于不同的参数。",
+  "The Idempotency-Key is still being processed. Retry shortly.":
+    "Idempotency-Key 仍在处理中，请稍后重试。",
+  "The request could not be completed. Try again.": "请求未完成，请重试。",
   "Enter a valid coupon code.": "请输入有效的优惠券代码。",
   "Enter a valid redemption code.": "请输入有效的兑换码。",
   "Coupon preview": "优惠券预览",

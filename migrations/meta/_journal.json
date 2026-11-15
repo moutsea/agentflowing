@@ -71,6 +71,13 @@
       "when": 1794617776097,
       "tag": "0009_bent_falcon",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1794677285277,
+      "tag": "0010_lush_bruce_banner",
+      "breakpoints": true
     }
   ]
 }

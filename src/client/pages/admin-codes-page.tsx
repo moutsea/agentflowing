@@ -66,8 +66,37 @@ function statusKey(status: CodeStatus) {
   return `Code status: ${status}`;
 }
 
-function localizedRequestError(error: unknown, translate: (key: string) => string) {
+const requestErrorTranslations: Record<string, string> = {
+  forbidden: "Invalid request origin",
+  rate_limited: "Too many requests. Try again shortly.",
+  invalid_request: "Check the issuance fields and try again.",
+  invalid_code: "Code has an invalid format.",
+  invalid_rate: "Check the issuance fields and try again.",
+  invalid_valid_days: "Check the issuance fields and try again.",
+  invalid_count: "Check the issuance fields and try again.",
+  not_found: "Code not found",
+  reserved: "Code is reserved for another payment.",
+  already_used: "Code has already been used.",
+  revoked: "Code has been revoked.",
+  expired: "Code has expired.",
+  conflict: "Code is temporarily unavailable.",
+  daily_cap_reached: "Daily issuance limit reached",
+  idempotency_conflict: "The Idempotency-Key was already used with different parameters.",
+  idempotency_in_progress: "The Idempotency-Key is still being processed. Retry shortly.",
+  internal_error: "The request could not be completed. Try again.",
+};
+
+function localizedRequestError(
+  error: unknown,
+  translate: (key: string) => string,
+  language?: string,
+) {
   if (error instanceof ApiError) {
+    if (language === "zh-CN" && error.messages?.["zh-CN"]) {
+      return error.messages["zh-CN"];
+    }
+    const fallbackKey = error.code ? requestErrorTranslations[error.code] : undefined;
+    if (language === "zh-CN" && fallbackKey) return translate(fallbackKey);
     if (error.code === "daily_cap_reached") return translate("Daily issuance limit reached");
     if (error.code === "idempotency_conflict")
       return translate("The Idempotency-Key was already used with different parameters.");
@@ -168,7 +197,7 @@ function AdminCodesManager() {
       saveIssuanceKey(storageKey, null);
       if (!isCoupon) await loadIssuanceStatus();
     } catch (caught) {
-      setError(localizedRequestError(caught, t));
+      setError(localizedRequestError(caught, t, i18n.resolvedLanguage));
     } finally {
       setBusy("");
     }
@@ -189,7 +218,7 @@ function AdminCodesManager() {
       setDetails(response.data ?? response);
     } catch (caught) {
       setDetails(null);
-      setError(localizedRequestError(caught, t));
+      setError(localizedRequestError(caught, t, i18n.resolvedLanguage));
     } finally {
       setBusy("");
     }
@@ -209,7 +238,7 @@ function AdminCodesManager() {
       setNotice(t("Code revoked"));
       if (kind === "redemption") await loadIssuanceStatus();
     } catch (caught) {
-      setError(localizedRequestError(caught, t));
+      setError(localizedRequestError(caught, t, i18n.resolvedLanguage));
     } finally {
       setBusy("");
     }
@@ -501,7 +530,7 @@ function AdminCodesManager() {
                   </div>
                 )}
               </dl>
-              {details.status === "active" && !confirmRevoke && (
+              {(details.status === "active" || details.status === "expired") && !confirmRevoke && (
                 <button
                   className="danger-action"
                   type="button"
@@ -510,7 +539,7 @@ function AdminCodesManager() {
                   {t("Revoke code")}
                 </button>
               )}
-              {details.status === "active" && confirmRevoke && (
+              {(details.status === "active" || details.status === "expired") && confirmRevoke && (
                 <div className="admin-code-confirm">
                   <span>{t("Revoke this code? This cannot be undone.")}</span>
                   <button

@@ -108,6 +108,8 @@ describe("platform admin code management", () => {
     };
     expect(couponBody.data.codes).toHaveLength(2);
 
+    // Use a fresh environment wrapper to exercise the persisted replay path
+    // after the request-local in-flight cache has been released.
     const couponReplay = await request(
       "/api/admin/coupons",
       {
@@ -118,13 +120,34 @@ describe("platform admin code management", () => {
         }),
         body: JSON.stringify({ rate: 20, count: 2, validDays: 7, source: "test" }),
       },
-      requestEnv,
+      adminEnv(user.userId),
     );
     expect(couponReplay.status).toBe(201);
     const couponReplayBody = (await couponReplay.json()) as {
       data: { codes: Array<{ code: string }> };
     };
     expect(couponReplayBody.data.codes).toEqual(couponBody.data.codes);
+
+    const couponConflict = await request(
+      "/api/admin/coupons",
+      {
+        method: "POST",
+        headers: headers(user.cookie, {
+          "content-type": "application/json",
+          "Idempotency-Key": "admin-coupon-replay",
+        }),
+        body: JSON.stringify({ rate: 25, count: 2, validDays: 7, source: "test" }),
+      },
+      adminEnv(user.userId),
+    );
+    expect(couponConflict.status).toBe(409);
+    expect(await couponConflict.json()).toMatchObject({ error: "idempotency_conflict" });
+    const couponCount = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM coupon WHERE created_by = ?",
+    )
+      .bind(user.userId)
+      .first<{ count: number }>();
+    expect(couponCount?.count).toBe(2);
 
     const couponCode = couponBody.data.codes[0]!.code;
     const couponDetails = await request(
@@ -231,5 +254,68 @@ describe("platform admin code management", () => {
     } finally {
       consoleSpy.mockRestore();
     }
+  });
+
+  it("returns bilingual API errors and lets admins revoke expired unused coupons", async () => {
+    const user = await signIn();
+    const requestEnv = adminEnv(user.userId);
+
+    const invalidCode = await request(
+      "/api/admin/coupons/bad",
+      { headers: headers(user.cookie) },
+      requestEnv,
+    );
+    expect(invalidCode.status).toBe(400);
+    expect(await invalidCode.json()).toMatchObject({
+      error: "invalid_code",
+      messages: { "zh-CN": "优惠券代码格式无效。" },
+    });
+
+    const limitSpy = vi.spyOn(env.API_RATE_LIMITER, "limit").mockResolvedValue({ success: false });
+    try {
+      const limited = await request(
+        "/api/admin/redemption-codes/issuance-status",
+        { headers: headers(user.cookie) },
+        requestEnv,
+      );
+      expect(limited.status).toBe(429);
+      expect(await limited.json()).toMatchObject({
+        error: "rate_limited",
+        messages: { "zh-CN": "请求过于频繁，请稍后重试。" },
+      });
+    } finally {
+      limitSpy.mockRestore();
+    }
+
+    const issued = await request(
+      "/api/admin/coupons",
+      {
+        method: "POST",
+        headers: headers(user.cookie, { "content-type": "application/json" }),
+        body: JSON.stringify({ rate: 10, count: 1, validDays: 1 }),
+      },
+      requestEnv,
+    );
+    expect(issued.status).toBe(201);
+    const issuedBody = (await issued.json()) as { data: { codes: Array<{ code: string }> } };
+    const expiredAt = Math.floor(Date.now() / 1000) - 1;
+    await env.DB.prepare("UPDATE coupon SET createdAt = ?, expires_at = ? WHERE code = ?")
+      .bind(expiredAt - 86_400, expiredAt, issuedBody.data.codes[0]!.code)
+      .run();
+
+    const expired = await request(
+      `/api/admin/coupons/${issuedBody.data.codes[0]!.code}`,
+      { headers: headers(user.cookie) },
+      requestEnv,
+    );
+    expect(expired.status).toBe(200);
+    expect(await expired.json()).toMatchObject({ data: { status: "expired" } });
+    const revoked = await request(
+      `/api/admin/coupons/${issuedBody.data.codes[0]!.code}`,
+      { method: "DELETE", headers: headers(user.cookie) },
+      requestEnv,
+    );
+    expect(revoked.status).toBe(200);
+    expect(await revoked.json()).toMatchObject({ data: { status: "revoked" } });
   });
 });
