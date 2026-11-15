@@ -734,6 +734,10 @@ describe("direct QR coupon checkout", () => {
         paymentIntentId: null,
       });
       expect(await balance(workspace.organizationId)).toBe(0);
+      // Leave the unresolved payment intact, but outside later tests' global stale sweep.
+      await env.DB.prepare(`UPDATE "order" SET createdAt = unixepoch() WHERE id = ?`)
+        .bind(pending!.id)
+        .run();
     },
   );
 
