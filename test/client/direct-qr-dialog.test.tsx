@@ -94,6 +94,26 @@ describe("direct QR dialog lifecycle", () => {
     expect(cancel).not.toHaveBeenCalled();
   });
 
+  it("still retries temporary creation failures without requiring coupon changes", async () => {
+    await render();
+    await act(async () =>
+      creates[0]!.response.resolve(
+        Response.json(
+          {
+            error: "internal_error",
+            messages: { en: "Please retry shortly.", "zh-CN": "请稍后重试。" },
+          },
+          { status: 500 },
+        ),
+      ),
+    );
+    expect(view.container.textContent).toContain("Please retry shortly.");
+    await click("Get a new code");
+    expect(creates).toHaveLength(2);
+    await resolveCreate(1, "pi_retried");
+    expect(view.container.querySelector("img")?.getAttribute("src")).toContain("pi_retried");
+  });
+
   it("finishes a payment that succeeded during cancellation without starting card checkout", async () => {
     await render();
     await resolveCreate(0, "pi_paid");

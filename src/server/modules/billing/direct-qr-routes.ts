@@ -5,6 +5,7 @@ import { z } from "zod";
 import { QR_PAYMENT_METHODS } from "../../../shared/direct-qr";
 import { readRuntimeString } from "../../env";
 import { requireAuth } from "../../middleware/auth";
+import { requireSameOrigin } from "../../middleware/origin";
 import { enforceRateLimit } from "../../middleware/rate-limit";
 import { logEvent } from "../../observability";
 import type { AppContext } from "../../types";
@@ -14,6 +15,7 @@ import {
   cancelDirectQrIntent,
   createDirectQrCheckout,
   DirectQrError,
+  failDirectQrIntent,
   fulfillDirectQrIntent,
   getDirectQrAvailability,
   loadOwnedDirectQrIntent,
@@ -29,6 +31,7 @@ import { StripeConfigurationError } from "./stripe";
 const createQrCheckoutSchema = z.object({
   planId: z.enum(["pro", "scale"]),
   method: z.enum(QR_PAYMENT_METHODS),
+  couponCode: z.string().optional(),
 });
 
 export const directQrRoutes = new Hono<AppContext>();
@@ -56,6 +59,7 @@ directQrRoutes.post(
   "/",
   requireAuth,
   requireWorkspaceManager,
+  requireSameOrigin,
   zValidator("json", createQrCheckoutSchema),
   async (context) => {
     // The intent's return_url is built from APP_URL, so a missing value would
@@ -66,6 +70,7 @@ directQrRoutes.post(
       return context.json(
         { error: "billing_not_configured", message: "APP_URL is not configured" },
         503,
+        NO_STORE,
       );
     }
     await enforceRateLimit({
@@ -83,6 +88,7 @@ directQrRoutes.post(
         planId: context.req.valid("json").planId,
         method: context.req.valid("json").method,
         appUrl,
+        couponCode: context.req.valid("json").couponCode,
       });
       // The order id stays server-side: the dialog only ever needs the payment,
       // and the intent id it carries is what every later call is keyed by.
@@ -96,10 +102,23 @@ directQrRoutes.post(
       return context.json({ data: result.payment }, 201, NO_STORE);
     } catch (error) {
       if (error instanceof DirectQrError) {
-        return context.json({ error: error.code, message: error.message }, error.status);
+        return context.json(
+          {
+            error: error.code,
+            reason: error.reason,
+            message: error.message,
+            messages: error.messages,
+          },
+          error.status,
+          NO_STORE,
+        );
       }
       if (error instanceof StripeConfigurationError) {
-        return context.json({ error: "billing_not_configured", message: error.message }, 503);
+        return context.json(
+          { error: "billing_not_configured", message: error.message },
+          503,
+          NO_STORE,
+        );
       }
       throw error;
     }
@@ -126,7 +145,7 @@ directQrRoutes.get("/:id", requireAuth, requireWorkspaceManager, async (context)
       organizationId: context.var.organization.id,
       paymentIntentId: context.req.param("id"),
     });
-    const status = toDirectQrStatus(intent.status);
+    let status = toDirectQrStatus(intent.status);
 
     // Credit now rather than wait for the webhook, so the balance the dialog
     // shows is already updated.
@@ -142,12 +161,29 @@ directQrRoutes.get("/:id", requireAuth, requireWorkspaceManager, async (context)
           message: error instanceof Error ? error.message : String(error),
         });
       }
+    } else if (status === "failed") {
+      status = await cancelDirectQrIntent({
+        env: context.env,
+        organizationId: context.var.organization.id,
+        paymentIntentId: intent.id,
+      });
+    } else if (status === "canceled") {
+      await failDirectQrIntent(context.env, intent.id);
     }
 
     return context.json({ data: { status } }, 200, NO_STORE);
   } catch (error) {
     if (error instanceof DirectQrError) {
-      return context.json({ error: error.code, message: error.message }, error.status, NO_STORE);
+      return context.json(
+        {
+          error: error.code,
+          reason: error.reason,
+          message: error.message,
+          messages: error.messages,
+        },
+        error.status,
+        NO_STORE,
+      );
     }
     // Talking to Stripe without a key is a configuration problem, not a crash.
     if (error instanceof StripeConfigurationError) {
@@ -162,32 +198,47 @@ directQrRoutes.get("/:id", requireAuth, requireWorkspaceManager, async (context)
 });
 
 /** Called when the dialog is dismissed, so an unwanted code stops being payable. */
-directQrRoutes.delete("/:id", requireAuth, requireWorkspaceManager, async (context) => {
-  await enforceRateLimit({
-    limiter: context.env.API_RATE_LIMITER,
-    key: `${context.var.organization.id}:${context.var.user.id}:qr-cancel`,
-    scope: "billing_qr_cancel",
-    requestId: context.var.requestId,
-  });
-  try {
-    const status = await cancelDirectQrIntent({
-      env: context.env,
-      organizationId: context.var.organization.id,
-      paymentIntentId: context.req.param("id"),
+directQrRoutes.delete(
+  "/:id",
+  requireAuth,
+  requireWorkspaceManager,
+  requireSameOrigin,
+  async (context) => {
+    await enforceRateLimit({
+      limiter: context.env.API_RATE_LIMITER,
+      key: `${context.var.organization.id}:${context.var.user.id}:qr-cancel`,
+      scope: "billing_qr_cancel",
+      requestId: context.var.requestId,
     });
-    return context.json({ data: { status } }, 200, NO_STORE);
-  } catch (error) {
-    if (error instanceof DirectQrError) {
-      return context.json({ error: error.code, message: error.message }, error.status, NO_STORE);
+    try {
+      const status = await cancelDirectQrIntent({
+        env: context.env,
+        organizationId: context.var.organization.id,
+        paymentIntentId: context.req.param("id"),
+      });
+      return context.json({ data: { status } }, 200, NO_STORE);
+    } catch (error) {
+      if (error instanceof DirectQrError) {
+        return context.json(
+          {
+            error: error.code,
+            reason: error.reason,
+            message: error.message,
+            messages: error.messages,
+          },
+          error.status,
+          NO_STORE,
+        );
+      }
+      // Talking to Stripe without a key is a configuration problem, not a crash.
+      if (error instanceof StripeConfigurationError) {
+        return context.json(
+          { error: "billing_not_configured", message: error.message },
+          503,
+          NO_STORE,
+        );
+      }
+      throw error;
     }
-    // Talking to Stripe without a key is a configuration problem, not a crash.
-    if (error instanceof StripeConfigurationError) {
-      return context.json(
-        { error: "billing_not_configured", message: error.message },
-        503,
-        NO_STORE,
-      );
-    }
-    throw error;
-  }
-});
+  },
+);

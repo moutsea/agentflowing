@@ -1,6 +1,6 @@
 import { createFactory } from "hono/factory";
 
-import { logEvent } from "../observability";
+import { logEvent, requestLogPath } from "../observability";
 import type { AppContext } from "../types";
 
 const factory = createFactory<AppContext>();
@@ -25,7 +25,7 @@ export const observeRequest = factory.createMiddleware(async (context, next) => 
     logEvent("info", "request.completed", {
       requestId,
       method: context.req.method,
-      path: context.req.path,
+      path: requestLogPath(context.req.path),
       status: failed ? 500 : context.res.status,
       durationMs: Date.now() - startedAt,
       cfRay: context.req.header("cf-ray"),

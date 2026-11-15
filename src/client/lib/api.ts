@@ -3,6 +3,8 @@ export class ApiError extends Error {
     message: string,
     readonly status: number,
     readonly code?: string,
+    readonly messages?: Record<string, string>,
+    readonly reason?: string,
   ) {
     super(message);
     this.name = "ApiError";
@@ -12,6 +14,8 @@ export class ApiError extends Error {
 type ErrorPayload = {
   error?: string;
   message?: string;
+  messages?: Record<string, string>;
+  reason?: string;
 };
 
 export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
@@ -35,6 +39,8 @@ export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T
       payload.message || "The request could not be completed",
       response.status,
       payload.error,
+      payload.messages,
+      payload.reason,
     );
   }
   return payload;

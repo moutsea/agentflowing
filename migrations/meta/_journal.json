@@ -64,6 +64,41 @@
       "when": 1793968978984,
       "tag": "0008_analytics_funnel_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1794617776097,
+      "tag": "0009_bent_falcon",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1794677285277,
+      "tag": "0010_lush_bruce_banner",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1794706581825,
+      "tag": "0011_watery_abomination",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1794706581826,
+      "tag": "0012_legacy_coupon_issuance_backfill",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1794738613061,
+      "tag": "0013_direct_qr_create_recovery",
+      "breakpoints": true
     }
   ]
 }

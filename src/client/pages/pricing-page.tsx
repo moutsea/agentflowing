@@ -16,7 +16,7 @@ import { DirectQrDialog } from "../components/direct-qr-dialog";
 import { DirectQrReturn } from "../components/direct-qr-return";
 import { LanguageSwitcher } from "../components/language-switcher";
 import { localeFor } from "../i18n";
-import { apiRequest } from "../lib/api";
+import { apiRequest, ApiError } from "../lib/api";
 import { WorkspaceContext } from "../workspace";
 
 type CatalogPlan = (typeof DEFAULT_PLANS)[number] & {
@@ -47,6 +47,41 @@ export function PricingPage() {
   const [availability, setAvailability] = useState<DirectQrAvailability | null>(null);
   const [qrPlan, setQrPlan] = useState<CatalogPlan | null>(null);
   const resumedCheckout = useRef(false);
+  const [couponCode, setCouponCode] = useState("");
+  const [couponPreview, setCouponPreview] = useState("");
+  const [previewingCoupon, setPreviewingCoupon] = useState(false);
+
+  const previewCoupon = async () => {
+    if (previewingCoupon || !couponCode.trim()) return;
+    setPreviewingCoupon(true);
+    setCouponPreview("");
+    try {
+      const result = await apiRequest<{
+        valid: boolean;
+        rate?: number;
+        expiresAt?: string;
+        messages?: Record<string, string>;
+      }>("/api/billing/coupons/validate", {
+        method: "POST",
+        body: JSON.stringify({ code: couponCode.trim() }),
+      });
+      setCouponPreview(
+        result.valid
+          ? `${result.rate}% · ${t("Expires")}: ${new Intl.DateTimeFormat(localeFor(i18n.resolvedLanguage), { dateStyle: "medium", timeStyle: "short" }).format(new Date(result.expiresAt!))}`
+          : (result.messages?.[i18n.resolvedLanguage ?? "en"] ??
+              result.messages?.en ??
+              t("Enter a valid coupon code.")),
+      );
+    } catch (caught) {
+      setCouponPreview(
+        caught instanceof ApiError
+          ? (caught.messages?.[i18n.resolvedLanguage ?? "en"] ?? caught.message)
+          : t("Network error. Try again."),
+      );
+    } finally {
+      setPreviewingCoupon(false);
+    }
+  };
 
   useEffect(() => {
     void apiRequest<{ data: CatalogPlan[] }>("/api/billing/catalog")
@@ -169,6 +204,36 @@ export function PricingPage() {
                 {error || t("Checkout was canceled. No charge was made.")}
               </div>
             )}
+            {session?.user && qrMethods.length > 0 && (
+              <form
+                className="panel settings-card form-section"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void previewCoupon();
+                }}
+              >
+                <label>
+                  <span>{t("Coupon code")}</span>
+                  <input
+                    aria-label={t("Coupon code")}
+                    value={couponCode}
+                    disabled={previewingCoupon}
+                    onChange={(event) => {
+                      setCouponCode(event.target.value);
+                      setCouponPreview("");
+                    }}
+                  />
+                </label>
+                <button
+                  className="button button-light"
+                  type="submit"
+                  disabled={previewingCoupon || !couponCode.trim()}
+                >
+                  {t("Coupon preview")}
+                </button>
+                {couponPreview && <p role="status">{couponPreview}</p>}
+              </form>
+            )}
             <div className="pricing-grid">
               {plans.map((plan, index) => (
                 <article
@@ -236,6 +301,7 @@ export function PricingPage() {
       {qrPlan && !returningFromQr && (
         <DirectQrDialog
           credits={qrPlan.credits}
+          couponCode={couponCode.trim() || undefined}
           methods={qrMethods}
           onClose={() => setQrPlan(null)}
           onFallbackToCheckout={() => {

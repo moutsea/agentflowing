@@ -110,4 +110,5 @@ export type DirectQrAvailability = {
 export type DirectQrCreateRequest = {
   planId: string;
   method: QrPaymentMethod;
+  couponCode?: string;
 };

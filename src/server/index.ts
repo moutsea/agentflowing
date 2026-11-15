@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { secureHeaders } from "hono/secure-headers";
 import { routeAgentRequest } from "agents";
-import { and, eq } from "drizzle-orm";
+import { and, DrizzleQueryError, eq } from "drizzle-orm";
 
 import { MonetizedAgent } from "./agents/monetized-agent";
 import { createAuth, getAuthCapabilities } from "./auth";
@@ -19,16 +19,20 @@ import { adminAnalyticsRoutes, analyticsRoutes } from "./modules/analytics/route
 import { purgeExpiredAnalytics } from "./modules/analytics/service";
 import { apiKeyRoutes } from "./modules/api-keys/routes";
 import { billingRoutes } from "./modules/billing/routes";
+import { couponRoutes } from "./modules/coupons/routes";
 import { expireStaleDirectQrOrders } from "./modules/billing/direct-qr-service";
 import { reapStaleAgentRuns } from "./modules/billing/service";
+import { redemptionCodeRoutes } from "./modules/redemption-codes/routes";
 import { chatRoutes } from "./modules/chats/routes";
 import { fileRoutes } from "./modules/files/routes";
 import { externalApiRoutes } from "./modules/external-api/routes";
+import { externalCodesRoutes } from "./modules/external-codes/routes";
+import { adminCodeRoutes } from "./modules/admin-codes/routes";
 import { resolveWorkspace } from "./modules/workspaces/service";
 import { adminNoticeRoutes, noticeRoutes } from "./modules/notices/routes";
 import { workspaceRoutes } from "./modules/workspaces/routes";
 import type { AppContext } from "./types";
-import { logEvent } from "./observability";
+import { codeLogId, logEvent, requestLogPath } from "./observability";
 
 export { MonetizedAgent };
 
@@ -69,6 +73,8 @@ app.on(["GET", "POST"], "/api/auth/*", (context) => {
 app.route("/api/chats", chatRoutes);
 app.route("/api/agents", agentRoutes);
 app.route("/api/billing", billingRoutes);
+app.route("/api/billing/redemption-codes", redemptionCodeRoutes);
+app.route("/api/billing/coupons", couponRoutes);
 // Page views never reach the Worker (assets serve the SPA), so the beacon is the
 // only writer here. Both analytics routers must be registered before
 // `/api` + workspaceRoutes, whose catch-all `requireAuth` would answer 401 first.
@@ -76,9 +82,11 @@ app.route("/api/analytics", analyticsRoutes);
 app.route("/api/files", fileRoutes);
 app.route("/api/api-keys", apiKeyRoutes);
 app.route("/api/v1", externalApiRoutes);
+app.route("/api/external", externalCodesRoutes);
 app.route("/api/notices", noticeRoutes);
 app.route("/api/admin/notices", adminNoticeRoutes);
 app.route("/api/admin/analytics", adminAnalyticsRoutes);
+app.route("/api/admin", adminCodeRoutes);
 app.route("/api", workspaceRoutes);
 
 app.all("/agents/*", async (context) => {
@@ -136,7 +144,7 @@ app.all("/agents/*", async (context) => {
 
 app.notFound((context) => context.json({ error: "Not found" }, 404));
 
-app.onError((error, context) => {
+app.onError(async (error, context) => {
   if (error instanceof HTTPException && error.status < 500) {
     return context.json({ error: "invalid_request", message: error.message }, error.status);
   }
@@ -144,13 +152,28 @@ app.onError((error, context) => {
     context.header("retry-after", String(error.retryAfterSeconds));
     return context.json({ error: "rate_limited", message: error.message, scope: error.scope }, 429);
   }
+  const input = /^\/api\/billing\/(?:coupons|redemption-codes)(?:\/|$)/.test(context.req.path)
+    ? await context.req.json<{ code?: unknown }>().catch(() => null)
+    : null;
   logEvent("error", "request.failed", {
     requestId: context.var.requestId,
     method: context.req.method,
-    path: context.req.path,
-    message: error.message,
+    path: requestLogPath(context.req.path),
+    error: error instanceof DrizzleQueryError ? "database_error" : "internal_error",
+    objectId: typeof input?.code === "string" ? await codeLogId(input.code) : undefined,
+    retryable: true,
   });
-  return context.json({ error: "Internal server error" }, 500);
+  return context.json(
+    {
+      error: "internal_error",
+      message: "A temporary server error occurred. Please retry.",
+      messages: {
+        en: "A temporary server error occurred. Please retry.",
+        "zh-CN": "服务器暂时不可用，请稍后重试。",
+      },
+    },
+    500,
+  );
 });
 
 export default {

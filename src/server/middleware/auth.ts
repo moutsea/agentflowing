@@ -10,7 +10,14 @@ export const requireAuth = factory.createMiddleware(async (context, next) => {
   const auth = createAuth(context.env);
   const result = await auth.api.getSession({ headers: context.req.raw.headers });
   if (!result) {
-    return context.json({ error: "unauthorized", message: "Sign in is required" }, 401);
+    return context.json(
+      {
+        error: "unauthorized",
+        message: "Sign in is required",
+        messages: { en: "Sign in is required", "zh-CN": "请先登录。" },
+      },
+      401,
+    );
   }
 
   const workspace = await resolveWorkspace({

@@ -22,7 +22,7 @@ type Phase =
   | { name: "ready"; payment: DirectQrPayment }
   | { name: "paid" }
   | { name: "expired" }
-  | { name: "error" };
+  | { name: "error"; error?: ApiError };
 
 export type DirectQrDialogProps = {
   open: boolean;
@@ -30,6 +30,7 @@ export type DirectQrDialogProps = {
   planName: string;
   credits: number;
   methods: QrPaymentMethod[];
+  couponCode?: string;
   /** Close the dialog; cancellation on dismissal is best effort. */
   onClose: () => void;
   /** Switch to a recurring subscription after canceling the one-time payment. */
@@ -72,6 +73,7 @@ export function DirectQrDialog({
   planName,
   credits,
   methods,
+  couponCode,
   onClose,
   onFallbackToCheckout,
   onPaid,
@@ -89,7 +91,7 @@ export function DirectQrDialog({
   // The outcome of one request, tagged with the wallet/attempt it belongs to.
   // A request whose key no longer matches is still loading by definition, so
   // switching wallet shows the spinner without setting state in an effect.
-  const requestKey = `${planId}:${method ?? "none"}:${attempt}`;
+  const requestKey = `${planId}:${method ?? "none"}:${couponCode ?? ""}:${attempt}`;
   const [result, setResult] = useState<{ key: string; phase: Phase } | null>(null);
   const phase: Phase = result?.key === requestKey ? result.phase : { name: "loading" };
   const setPhase = useCallback(
@@ -136,7 +138,11 @@ export function DirectQrDialog({
         ? previous.request
         : apiRequest<{ data: DirectQrPayment }>("/api/billing/qr", {
             method: "POST",
-            body: JSON.stringify({ planId, method } satisfies DirectQrCreateRequest),
+            body: JSON.stringify({
+              planId,
+              method,
+              ...(couponCode ? { couponCode } : {}),
+            } satisfies DirectQrCreateRequest),
           }).then(({ data }) => data);
     if (!previous || previous.key !== key) createdRef.current = { key, request };
 
@@ -157,14 +163,18 @@ export function DirectQrDialog({
       })
       .catch((error: unknown) => {
         if (abandoned()) return;
-        setPhase(isAlreadyPaid(error) ? { name: "paid" } : { name: "error" });
+        setPhase(
+          isAlreadyPaid(error)
+            ? { name: "paid" }
+            : { name: "error", error: error instanceof ApiError ? error : undefined },
+        );
       });
 
     return () => {
       aliveRef.current = false;
       void releaseActiveIntent();
     };
-  }, [open, method, planId, releaseActiveIntent, requestKey, setPhase]);
+  }, [open, method, planId, couponCode, releaseActiveIntent, requestKey, setPhase]);
 
   // A hidden page may return from bfcache without remounting. Keep the intent
   // identity even if this best-effort cancellation fails; pageshow rechecks it.
@@ -380,6 +390,17 @@ export function DirectQrDialog({
   const locale = localeFor(i18n.resolvedLanguage);
   const methodLabel = (value: QrPaymentMethod) =>
     value === "wechat_pay" ? t("WeChat Pay") : t("Alipay");
+  const couponFailure =
+    phase.name === "error" &&
+    phase.error?.reason !== undefined &&
+    ["invalid_coupon", "coupon_not_found", "coupon_reserved", "coupon_unavailable"].includes(
+      phase.error.code ?? "",
+    );
+  const failureMessage =
+    phase.name === "error"
+      ? (phase.error?.messages?.[i18n.resolvedLanguage ?? "en"] ??
+        (couponFailure ? phase.error?.message : undefined))
+      : undefined;
 
   return (
     <div
@@ -420,7 +441,7 @@ export function DirectQrDialog({
             : t("Open WeChat and scan the code to pay.")}
         </p>
 
-        {methods.length > 1 && (
+        {methods.length > 1 && !couponFailure && (
           <div aria-label={t("Payment method")} className="direct-qr-methods" role="group">
             {methods.map((option) => (
               <button
@@ -486,7 +507,12 @@ export function DirectQrDialog({
             <CheckCircle2 aria-hidden="true" className="direct-qr-paid" size={46} />
           )}
 
-          {(phase.name === "expired" || phase.name === "error") && (
+          {couponFailure && (
+            <button className="button button-light" type="button" onClick={handleClose}>
+              {t("Change or remove coupon")}
+            </button>
+          )}
+          {(phase.name === "expired" || (phase.name === "error" && !couponFailure)) && (
             <button
               className="button button-light"
               disabled={replacing}
@@ -503,8 +529,14 @@ export function DirectQrDialog({
             {phase.name === "ready" && t("Waiting for payment… This window updates automatically.")}
             {phase.name === "paid" && <span className="paid">{t("Payment received.")}</span>}
             {phase.name === "expired" && t("This code is no longer valid.")}
-            {phase.name === "error" && t("Could not create a payment code. Try again.")}
+            {phase.name === "error" &&
+              (failureMessage ?? t("Could not create a payment code. Try again."))}
           </p>
+          {couponFailure && (
+            <p className="direct-qr-status">
+              {t("Close this dialog to change or remove the coupon, then start payment again.")}
+            </p>
+          )}
           {paymentMessage && phase.name !== "paid" && (
             <p className="direct-qr-status" role="alert">
               {t(paymentMessage)}

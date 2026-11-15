@@ -15,7 +15,7 @@ import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
 import { LanguageSwitcher } from "../components/language-switcher";
-import { apiRequest } from "../lib/api";
+import { apiRequest, ApiError } from "../lib/api";
 import { localeFor } from "../i18n";
 import { useWorkspace } from "../workspace";
 
@@ -52,7 +52,7 @@ function formatBytes(value: number) {
 
 export function SettingsPage() {
   const { i18n, t } = useTranslation();
-  const { session } = useWorkspace();
+  const { session, refreshWorkspace } = useWorkspace();
   const canManage = session.role === "owner" || session.role === "admin";
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [keys, setKeys] = useState<ApiKeyItem[]>([]);
@@ -63,6 +63,52 @@ export function SettingsPage() {
   const [newKeyName, setNewKeyName] = useState("");
   const [revealedSecret, setRevealedSecret] = useState("");
   const [copied, setCopied] = useState(false);
+  const [redemptionCode, setRedemptionCode] = useState("");
+  const [redemptionMessage, setRedemptionMessage] = useState("");
+  const [redemptionPreview, setRedemptionPreview] = useState<{
+    credits: number;
+    expiresAt: string;
+  } | null>(null);
+  const redeemCode = async (redeem: boolean) => {
+    if (busy || !redemptionCode.trim()) return;
+    setBusy("redemption");
+    setRedemptionMessage("");
+    try {
+      const body = JSON.stringify({ code: redemptionCode.trim() });
+      if (redeem) {
+        const { data } = await apiRequest<{ data: { credits: number; balance: number } }>(
+          "/api/billing/redemption-codes/redeem",
+          { method: "POST", body },
+        );
+        setRedemptionMessage(
+          `${t("Redemption succeeded")} · ${t("Balance updated: {{balance}} credits", { balance: data.balance })}`,
+        );
+        setRedemptionPreview(null);
+        setRedemptionCode("");
+        await refreshWorkspace();
+      } else {
+        const result = await apiRequest<
+          | { valid: true; credits: number; expiresAt: string }
+          | { valid: false; messages: Record<string, string> }
+        >("/api/billing/redemption-codes/validate", { method: "POST", body });
+        setRedemptionPreview(result.valid ? result : null);
+        if (!result.valid)
+          setRedemptionMessage(
+            result.messages[i18n.resolvedLanguage ?? "en"] ??
+              result.messages.en ??
+              t("Enter a valid redemption code."),
+          );
+      }
+    } catch (caught) {
+      setRedemptionMessage(
+        caught instanceof ApiError
+          ? (caught.messages?.[i18n.resolvedLanguage ?? "en"] ?? caught.message)
+          : t("Network error. Try again."),
+      );
+    } finally {
+      setBusy("");
+    }
+  };
   const formatDate = (value?: string | null) => {
     if (!value) return t("Never");
     return new Intl.DateTimeFormat(localeFor(i18n.resolvedLanguage), {
@@ -262,6 +308,55 @@ export function SettingsPage() {
               </Link>
             )}
           </div>
+        </article>
+
+        <article className="panel settings-card">
+          <h2>{t("Redemption codes")}</h2>
+          <form
+            className="form-section"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void redeemCode(false);
+            }}
+          >
+            <label>
+              <span>{t("Redemption code")}</span>
+              <input
+                aria-label={t("Redemption code")}
+                value={redemptionCode}
+                disabled={Boolean(busy)}
+                onChange={(event) => {
+                  setRedemptionCode(event.target.value);
+                  setRedemptionPreview(null);
+                  setRedemptionMessage("");
+                }}
+              />
+            </label>
+            <div className="settings-actions">
+              <button
+                className="button button-light"
+                type="submit"
+                disabled={Boolean(busy) || !redemptionCode.trim()}
+              >
+                {t("Redemption preview")}
+              </button>
+              <button
+                className="button button-dark"
+                type="button"
+                disabled={Boolean(busy) || !redemptionPreview}
+                onClick={() => void redeemCode(true)}
+              >
+                {t("Redeem code")}
+              </button>
+            </div>
+          </form>
+          {redemptionPreview && (
+            <p role="status">
+              {redemptionPreview.credits} {t("Credits")} · {t("Expires")}:{" "}
+              {formatDate(redemptionPreview.expiresAt)}
+            </p>
+          )}
+          {redemptionMessage && <p role="status">{redemptionMessage}</p>}
         </article>
 
         <article className="panel settings-card api-card">

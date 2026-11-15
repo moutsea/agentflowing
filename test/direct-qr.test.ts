@@ -389,13 +389,55 @@ describe("fulfillDirectQrIntent", () => {
     const { orderId, paymentIntentId } = await seedDirectQrOrder(workspace.organizationId);
     const intent = succeededIntent(orderId, workspace.organizationId, {}, paymentIntentId);
 
-    expect(await fulfillDirectQrIntent(env, intent)).toEqual({ duplicate: false });
-    // The status poll and the webhook both land here for one payment.
-    expect(await fulfillDirectQrIntent(env, intent)).toEqual({ duplicate: true });
-    expect(await fulfillDirectQrIntent(env, intent)).toEqual({ duplicate: true });
+    const results = await Promise.all(
+      Array.from({ length: 3 }, () => fulfillDirectQrIntent(env, intent)),
+    );
+    // The status poll and the webhook can land here at the same time.
+    expect(results.filter((result) => !result.duplicate)).toHaveLength(1);
+    expect(results.filter((result) => result.duplicate)).toHaveLength(2);
 
     // Credited once, not three times.
     expect(await getBalance(workspace.organizationId)).toBe(5000);
+    expect(
+      await env.DB.prepare(
+        `SELECT count(*) AS count FROM credit_ledger
+         WHERE organization_id = ? AND idempotency_key = ?`,
+      )
+        .bind(workspace.organizationId, `stripe:direct_qr:${paymentIntentId}`)
+        .first<{ count: number }>(),
+    ).toEqual({ count: 1 });
+  });
+
+  it("rolls back the grant when the order marker fails", async () => {
+    const workspace = await seedWorkspace();
+    const { orderId, paymentIntentId } = await seedDirectQrOrder(workspace.organizationId);
+    const triggerName = `reject_qr_order_${workspace.suffix.replaceAll("-", "")}`;
+    await env.DB.prepare(
+      `CREATE TRIGGER "${triggerName}" BEFORE UPDATE ON "order"
+       BEGIN SELECT RAISE(ABORT, 'temporary order marker failure'); END`,
+    ).run();
+
+    try {
+      await expect(
+        fulfillDirectQrIntent(
+          env,
+          succeededIntent(orderId, workspace.organizationId, {}, paymentIntentId),
+        ),
+      ).rejects.toThrow("temporary order marker failure");
+    } finally {
+      await env.DB.prepare(`DROP TRIGGER "${triggerName}"`).run();
+    }
+
+    expect(await getBalance(workspace.organizationId)).toBe(0);
+    expect(await getOrderStatus(orderId)).toMatchObject({ status: "processing" });
+    expect(
+      await env.DB.prepare(
+        `SELECT count(*) AS count FROM credit_ledger
+         WHERE organization_id = ? AND idempotency_key = ?`,
+      )
+        .bind(workspace.organizationId, `stripe:direct_qr:${paymentIntentId}`)
+        .first<{ count: number }>(),
+    ).toEqual({ count: 0 });
   });
 
   it("refuses an intent that has not been paid", async () => {
@@ -556,8 +598,8 @@ describe("DirectQrError", () => {
 });
 
 /**
- * Seed an order the sweep can pick up. A row without an intent id is released
- * without touching Stripe; a row with one drives the cancel/retrieve branches.
+ * Seed an order the sweep can pick up. A row without an intent id is resolved
+ * through Stripe search; a row with one drives the cancel/retrieve branches.
  */
 async function seedSweepOrder(options: {
   kind?: "credit_pack" | "subscription";
@@ -584,6 +626,55 @@ async function seedSweepOrder(options: {
     )
     .run();
   return { orderId, organizationId };
+}
+
+async function seedReservedCouponSweepOrder() {
+  const { userId, organizationId } = await seedWorkspace();
+  const orderId = `order_${crypto.randomUUID()}`;
+  const couponId = `coupon_${crypto.randomUUID()}`;
+  const now = Math.floor(Date.now() / 1000);
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO coupon
+       (id, code, discount_rate_bps, status, expires_at, reservation_id,
+        reserved_by_user_id, reserved_organization_id, reserved_at,
+        reservation_expires_at, createdAt, updatedAt)
+       VALUES (?, ?, 1000, 'reserved', ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(
+      couponId,
+      `TEST-${crypto.randomUUID()}`,
+      now + 86_400,
+      orderId,
+      userId,
+      organizationId,
+      now,
+      now + 3_600,
+      now,
+      now,
+    ),
+    env.DB.prepare(
+      `INSERT INTO "order"
+       (id, organization_id, provider, kind, plan_id, amount, currency, credits,
+        coupon_id, coupon_code, coupon_reservation_id, status, createdAt, updatedAt)
+       VALUES (?, ?, 'stripe', 'credit_pack', 'pro', 2610, 'usd', 5000,
+               ?, ?, ?, 'processing', ?, ?)`,
+    ).bind(
+      orderId,
+      organizationId,
+      couponId,
+      `TEST-${couponId}`,
+      orderId,
+      now - 7_200,
+      now - 7_200,
+    ),
+  ]);
+  return { couponId, orderId };
+}
+
+async function couponStatus(couponId: string) {
+  return env.DB.prepare(`SELECT status, reservation_id AS reservationId FROM coupon WHERE id = ?`)
+    .bind(couponId)
+    .first<{ status: string; reservationId: string | null }>();
 }
 
 async function orderStatus(orderId: string) {
@@ -753,12 +844,46 @@ describe("expireStaleDirectQrOrders", () => {
     await expect(orderStatus(orderId)).resolves.toBe("processing");
   });
 
-  it("fails an abandoned order that never received an intent", async () => {
+  it("keeps an order pending when Stripe search has not indexed its intent", async () => {
     const { orderId } = await seedSweepOrder({ ageSeconds: 7_200 });
     await expect(
-      expireStaleDirectQrOrders({ env: configuredEnv(), staleAfterSeconds: 3_600 }),
-    ).resolves.toEqual({ canceled: 0, recovered: 0, failed: 1 });
-    await expect(orderStatus(orderId)).resolves.toBe("failed");
+      expireStaleDirectQrOrders({
+        env: configuredEnv(),
+        staleAfterSeconds: 3_600,
+        stripe: {
+          paymentIntents: {
+            cancel: async () => ({ status: "canceled" }),
+            retrieve: async () => ({}) as Stripe.PaymentIntent,
+            search: async () => ({ data: [] }),
+          },
+        },
+      }),
+    ).resolves.toEqual({ canceled: 0, recovered: 0, failed: 0 });
+    await expect(orderStatus(orderId)).resolves.toBe("processing");
+  });
+
+  it("keeps a reserved coupon when Stripe search is unavailable", async () => {
+    const { couponId, orderId } = await seedReservedCouponSweepOrder();
+    await expect(
+      expireStaleDirectQrOrders({
+        env: configuredEnv(),
+        staleAfterSeconds: 3_600,
+        stripe: {
+          paymentIntents: {
+            cancel: async () => ({ status: "canceled" }),
+            retrieve: async () => ({}) as Stripe.PaymentIntent,
+            search: async () => {
+              throw new Error("Stripe search unavailable");
+            },
+          },
+        },
+      }),
+    ).resolves.toEqual({ canceled: 0, recovered: 0, failed: 0 });
+    await expect(orderStatus(orderId)).resolves.toBe("processing");
+    await expect(couponStatus(couponId)).resolves.toEqual({
+      status: "reserved",
+      reservationId: orderId,
+    });
   });
 
   it("leaves recent, paid and subscription orders alone", async () => {
