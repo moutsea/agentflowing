@@ -655,6 +655,88 @@ describe("direct QR coupon checkout", () => {
     expect(await balance(workspace.organizationId)).toBe(0);
   });
 
+  it.each([401, 403])(
+    "releases initial Stripe HTTP %s rejection but retains unknown retries",
+    async (status) => {
+      const workspace = await seedWorkspace();
+      const coupon = await issueCoupon({ env, rate: 20 });
+      let unknown = false;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          Response.json(
+            {
+              error: {
+                type: unknown ? "api_error" : "invalid_request_error",
+                message: "Stripe rejection",
+              },
+            },
+            { status: unknown ? 500 : status, headers: { "Stripe-Should-Retry": "false" } },
+          ),
+        ),
+      );
+      const checkout = () =>
+        createDirectQrCheckout({
+          env: configuredEnv(),
+          ...workspace,
+          userEmail: "payer@example.com",
+          planId: "pro",
+          method: "wechat_pay",
+          appUrl: env.APP_URL,
+          couponCode: coupon.code,
+        });
+      await expect(checkout()).rejects.toThrow("Stripe rejection");
+      const rejected = await env.DB.prepare(`SELECT id FROM "order" WHERE coupon_id = ?`)
+        .bind(coupon.id)
+        .first<{ id: string }>();
+      expect(await couponRow(coupon.id)).toMatchObject({ status: "active", reservationId: null });
+      expect(await orderRow(rejected!.id)).toMatchObject({
+        status: "failed",
+        paymentIntentId: null,
+      });
+
+      unknown = true;
+      await expect(checkout()).rejects.toThrow("Stripe rejection");
+      const pending = await env.DB.prepare(
+        `SELECT id FROM "order" WHERE coupon_id = ? AND status = 'created'`,
+      )
+        .bind(coupon.id)
+        .first<{ id: string }>();
+      await env.DB.prepare(`UPDATE "order" SET createdAt = unixepoch() - 7200 WHERE id = ?`)
+        .bind(pending!.id)
+        .run();
+      unknown = false;
+      const stripe = {
+        paymentIntents: {
+          search: async () => ({ data: [] }),
+          create: async () => {
+            throw {
+              type: status === 401 ? "StripeAuthenticationError" : "StripePermissionError",
+              statusCode: status,
+            };
+          },
+          cancel: async () => {
+            throw new Error("no known intent");
+          },
+          retrieve: async () => {
+            throw new Error("no known intent");
+          },
+        },
+      };
+      for (let tick = 0; tick < 2; tick++)
+        await expireStaleDirectQrOrders({ env: configuredEnv(), stripe });
+      expect(await couponRow(coupon.id)).toMatchObject({
+        status: "reserved",
+        reservationId: pending!.id,
+      });
+      expect(await orderRow(pending!.id)).toMatchObject({
+        status: "created",
+        paymentIntentId: null,
+      });
+      expect(await balance(workspace.organizationId)).toBe(0);
+    },
+  );
+
   it.each(["requires_action", "succeeded"] as const)(
     "replays an unknown create with the original request/key before resolving %s",
     async (status) => {

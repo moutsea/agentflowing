@@ -110,12 +110,17 @@ function stripeErrorCode(error: unknown) {
   return typeof code === "string" ? code : null;
 }
 
-function rejectedDirectQrCreate(error: unknown) {
+function rejectedDirectQrCreate(error: unknown, initialAttempt = false) {
   if (typeof error !== "object" || error === null) return false;
   const headers = Reflect.get(error, "headers");
   return (
-    Reflect.get(error, "type") === "StripeInvalidRequestError" &&
-    Reflect.get(error, "statusCode") === 400 &&
+    ((Reflect.get(error, "type") === "StripeInvalidRequestError" &&
+      Reflect.get(error, "statusCode") === 400) ||
+      (initialAttempt &&
+        ((Reflect.get(error, "type") === "StripeAuthenticationError" &&
+          Reflect.get(error, "statusCode") === 401) ||
+          (Reflect.get(error, "type") === "StripePermissionError" &&
+            Reflect.get(error, "statusCode") === 403)))) &&
     !Reflect.get(error, "payment_intent") &&
     stripeErrorCode(error) !== "idempotency_key_in_use" &&
     !(
@@ -663,7 +668,8 @@ export async function createDirectQrCheckout(params: {
         idempotencyKey: `agentflowing-direct-qr:${orderId}`,
       });
     } catch (error) {
-      creationRejected = rejectedDirectQrCreate(error);
+      // A later auth rejection cannot establish the outcome of an earlier request.
+      creationRejected = rejectedDirectQrCreate(error, true);
       throw error;
     }
     intentId = intent.id;
