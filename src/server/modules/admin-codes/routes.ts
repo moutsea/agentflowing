@@ -382,7 +382,12 @@ async function recoverLegacyCouponBatch(
     .bind(...bindings)
     .all<Record<string, unknown>>();
 
-  if (rows.results.length === 0) return null;
+  // A pending issuance with no durable association and no matching legacy
+  // coupon rows cannot be proven to be a replay. Never claim its lease and
+  // issue a second batch; leave it pending for manual recovery instead.
+  if (rows.results.length === 0) {
+    throw new AdminIdempotencyRecoveryConflictError();
+  }
   const matchingCouponCount = await env.DB.prepare(
     `SELECT COUNT(*) AS count
        FROM coupon

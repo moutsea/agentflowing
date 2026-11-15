@@ -482,7 +482,7 @@ describe("platform admin code management", () => {
     expect(issuance?.status).toBe("pending");
   });
 
-  it("does not recover another key's same-second coupon batch", async () => {
+  it("does not recover another key's same-second coupon batch or issue a replacement", async () => {
     const user = await signIn("Coupon batch boundary tester");
     const requestEnv = adminEnv(user.userId);
     const pendingKey = "coupon-pending-boundary";
@@ -517,10 +517,7 @@ describe("platform admin code management", () => {
       requestEnv,
     );
     expect(other.status).toBe(201);
-    const otherBody = (await other.json()) as {
-      data: { codes: Array<{ code: string }> };
-    };
-    const otherCodes = otherBody.data.codes.map((row) => row.code);
+    await other.json();
     const otherFirst = await env.DB.prepare(
       `SELECT createdAt FROM coupon WHERE admin_issuance_id = (
          SELECT id FROM admin_coupon_issuance WHERE actor_user_id = ? AND idempotency_key = ?
@@ -551,29 +548,23 @@ describe("platform admin code management", () => {
       },
       adminEnv(user.userId),
     );
-    expect(replay.status).toBe(201);
-    const replayBody = (await replay.json()) as {
-      data: { codes: Array<{ code: string }>; idempotentReplay: boolean };
-    };
-    expect(replayBody.data.idempotentReplay).toBe(false);
-    expect(replayBody.data.codes.map((row) => row.code)).not.toEqual(
-      expect.arrayContaining(otherCodes),
-    );
+    expect(replay.status).toBe(409);
+    expect(await replay.json()).toMatchObject({ error: "idempotency_recovery_conflict" });
     const couponCount = await env.DB.prepare(
       "SELECT COUNT(*) AS count FROM coupon WHERE created_by = ?",
     )
       .bind(user.userId)
       .first<{ count: number }>();
-    expect(couponCount?.count).toBe(4);
+    expect(couponCount?.count).toBe(2);
     const linked = await env.DB.prepare(
       "SELECT COUNT(*) AS count FROM coupon WHERE admin_issuance_id = ?",
     )
       .bind(pendingId)
       .first<{ count: number }>();
-    expect(linked?.count).toBe(2);
+    expect(linked?.count).toBe(0);
   });
 
-  it("reclaims an expired pending coupon issuance lease", async () => {
+  it("rejects a zero-match expired pending coupon issuance without issuing coupons", async () => {
     const user = await signIn("Coupon lease recovery tester");
     const requestEnv = adminEnv(user.userId);
     const key = "coupon-expired-lease";
@@ -584,7 +575,7 @@ describe("platform admin code management", () => {
       note: null,
       source: "admin",
     });
-    const expiredAt = Math.floor(Date.now() / 1000) - 120;
+    const expiredAt = Math.floor(Date.now() / 1000) - 600;
     await env.DB.prepare(
       `INSERT INTO admin_coupon_issuance
          (id, actor_user_id, idempotency_key, request_fingerprint, status, batch, created_at, updated_at)
@@ -592,6 +583,10 @@ describe("platform admin code management", () => {
     )
       .bind(crypto.randomUUID(), user.userId, key, fingerprint, expiredAt, expiredAt)
       .run();
+
+    const migrationSql = migrationFiles["../migrations/0012_legacy_coupon_issuance_backfill.sql"];
+    expect(migrationSql).toBeDefined();
+    await env.DB.prepare(migrationSql!).run();
 
     const response = await request(
       "/api/admin/coupons",
@@ -605,18 +600,25 @@ describe("platform admin code management", () => {
       },
       requestEnv,
     );
-    expect(response.status).toBe(201);
-    const responseBody = (await response.json()) as {
-      data: { codes: Array<{ code: string }> };
-    };
-    expect(responseBody.data.codes).toHaveLength(1);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: "idempotency_recovery_conflict" });
+    const couponCount = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM coupon WHERE created_by = ?",
+    )
+      .bind(user.userId)
+      .first<{ count: number }>();
+    expect(couponCount?.count).toBe(0);
     const record = await env.DB.prepare(
-      "SELECT status, batch FROM admin_coupon_issuance WHERE actor_user_id = ? AND idempotency_key = ?",
+      "SELECT status, batch, created_at AS createdAt, updated_at AS updatedAt FROM admin_coupon_issuance WHERE actor_user_id = ? AND idempotency_key = ?",
     )
       .bind(user.userId, key)
-      .first<{ status: string; batch: string | null }>();
-    expect(record?.status).toBe("completed");
-    expect(record?.batch).not.toBeNull();
+      .first<{ status: string; batch: string | null; createdAt: number; updatedAt: number }>();
+    expect(record).toMatchObject({
+      status: "pending",
+      batch: null,
+      createdAt: expiredAt,
+      updatedAt: expiredAt,
+    });
   });
 
   it("writes audit fields without logging the issued codes", async () => {
