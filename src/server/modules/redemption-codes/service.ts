@@ -235,7 +235,10 @@ function formatIssuedBatch(
     validDays: number;
   },
 ): IssuedRedemptionCodes {
-  const batch = rows.map((row) => ({ ...row, status: statusForCode(row) })) as IssuedRedemptionCodes;
+  const batch = rows.map((row) => ({
+    ...row,
+    status: statusForCode(row),
+  })) as IssuedRedemptionCodes;
   Object.defineProperties(batch, {
     idempotencyKey: { value: params.idempotencyKey, enumerable: false },
     requestFingerprint: { value: params.requestFingerprint, enumerable: false },
