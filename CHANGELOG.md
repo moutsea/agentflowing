@@ -26,6 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - T7/N1: release definitively rejected Stripe creates and persist exact requests for bounded idempotent recovery before cancellation or settlement.
 - T7/N2: allow correcting definitively unissued admin requests while retaining original request recovery for unknown outcomes.
 - T7/F1: release coupons on definitive initial Stripe authorization rejection without treating later retry rejection as proof of non-payment.
+- T7/F2: share coupon origin protection with QR creation/cancellation before any payment or reservation side effects.
 
 ## [0.1.0] - 2026-08-07
 

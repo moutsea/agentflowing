@@ -1,9 +1,9 @@
 import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
-import { createMiddleware } from "hono/factory";
 import { z } from "zod";
 
 import { requireAuth } from "../../middleware/auth";
+import { requireSameOrigin } from "../../middleware/origin";
 import { enforceRateLimit } from "../../middleware/rate-limit";
 import type { AppContext } from "../../types";
 import { COUPON_REASON_MESSAGES, previewCoupon } from "./service";
@@ -11,22 +11,9 @@ import { COUPON_REASON_MESSAGES, previewCoupon } from "./service";
 const validateCouponSchema = z.object({ code: z.unknown() }).strict();
 const NO_STORE = { "Cache-Control": "no-store" } as const;
 
-const protectCouponRequest = createMiddleware<AppContext>(async (context, next) => {
-  context.header("cache-control", "no-store");
-  const origin = context.req.header("origin");
-  if (
-    !["GET", "HEAD"].includes(context.req.method) &&
-    origin &&
-    origin !== new URL(context.env.APP_URL).origin
-  ) {
-    return context.json({ error: "forbidden", message: "Invalid request origin" }, 403, NO_STORE);
-  }
-  await next();
-});
-
 export const couponRoutes = new Hono<AppContext>();
 export const couponsRoutes = couponRoutes;
-couponRoutes.use("*", protectCouponRequest);
+couponRoutes.use("*", requireSameOrigin);
 
 couponRoutes.post(
   "/validate",

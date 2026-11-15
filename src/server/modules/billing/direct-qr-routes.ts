@@ -5,6 +5,7 @@ import { z } from "zod";
 import { QR_PAYMENT_METHODS } from "../../../shared/direct-qr";
 import { readRuntimeString } from "../../env";
 import { requireAuth } from "../../middleware/auth";
+import { requireSameOrigin } from "../../middleware/origin";
 import { enforceRateLimit } from "../../middleware/rate-limit";
 import { logEvent } from "../../observability";
 import type { AppContext } from "../../types";
@@ -58,6 +59,7 @@ directQrRoutes.post(
   "/",
   requireAuth,
   requireWorkspaceManager,
+  requireSameOrigin,
   zValidator("json", createQrCheckoutSchema),
   async (context) => {
     // The intent's return_url is built from APP_URL, so a missing value would
@@ -178,32 +180,38 @@ directQrRoutes.get("/:id", requireAuth, requireWorkspaceManager, async (context)
 });
 
 /** Called when the dialog is dismissed, so an unwanted code stops being payable. */
-directQrRoutes.delete("/:id", requireAuth, requireWorkspaceManager, async (context) => {
-  await enforceRateLimit({
-    limiter: context.env.API_RATE_LIMITER,
-    key: `${context.var.organization.id}:${context.var.user.id}:qr-cancel`,
-    scope: "billing_qr_cancel",
-    requestId: context.var.requestId,
-  });
-  try {
-    const status = await cancelDirectQrIntent({
-      env: context.env,
-      organizationId: context.var.organization.id,
-      paymentIntentId: context.req.param("id"),
+directQrRoutes.delete(
+  "/:id",
+  requireAuth,
+  requireWorkspaceManager,
+  requireSameOrigin,
+  async (context) => {
+    await enforceRateLimit({
+      limiter: context.env.API_RATE_LIMITER,
+      key: `${context.var.organization.id}:${context.var.user.id}:qr-cancel`,
+      scope: "billing_qr_cancel",
+      requestId: context.var.requestId,
     });
-    return context.json({ data: { status } }, 200, NO_STORE);
-  } catch (error) {
-    if (error instanceof DirectQrError) {
-      return context.json({ error: error.code, message: error.message }, error.status, NO_STORE);
+    try {
+      const status = await cancelDirectQrIntent({
+        env: context.env,
+        organizationId: context.var.organization.id,
+        paymentIntentId: context.req.param("id"),
+      });
+      return context.json({ data: { status } }, 200, NO_STORE);
+    } catch (error) {
+      if (error instanceof DirectQrError) {
+        return context.json({ error: error.code, message: error.message }, error.status, NO_STORE);
+      }
+      // Talking to Stripe without a key is a configuration problem, not a crash.
+      if (error instanceof StripeConfigurationError) {
+        return context.json(
+          { error: "billing_not_configured", message: error.message },
+          503,
+          NO_STORE,
+        );
+      }
+      throw error;
     }
-    // Talking to Stripe without a key is a configuration problem, not a crash.
-    if (error instanceof StripeConfigurationError) {
-      return context.json(
-        { error: "billing_not_configured", message: error.message },
-        503,
-        NO_STORE,
-      );
-    }
-    throw error;
-  }
-});
+  },
+);
