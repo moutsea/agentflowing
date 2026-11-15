@@ -96,7 +96,7 @@ function stripeFetchMock() {
 
     if (method === "POST" && path === "/v1/payment_intents") {
       paymentIntentSequence += 1;
-      const paymentIntentId = `pi_coupon_${paymentIntentSequence}`;
+      const paymentIntentId = `pi_coupon${paymentIntentSequence}`;
       const paymentMethod = body.get("payment_method_types[0]") ?? "wechat_pay";
       const metadata = {
         orderId: body.get("metadata[orderId]") ?? "",
@@ -406,6 +406,40 @@ describe("direct QR coupon checkout", () => {
     ).toEqual({ count: 1 });
   });
 
+  it("settles a current success instead of releasing on a stale failed webhook", async () => {
+    const stripe = stripeFetchMock();
+    const workspace = await seedWorkspace();
+    const coupon = await issueCoupon({ env, rate: 20 });
+    const checkout = await createDirectQrCheckout({
+      env: configuredEnv(),
+      ...workspace,
+      userEmail: `${workspace.userId}@example.com`,
+      planId: "pro",
+      method: "wechat_pay",
+      appUrl: env.APP_URL,
+      couponCode: coupon.code,
+    });
+    const paid = succeededIntent(stripe.created[0]!);
+    stripe.intents.set(paid.id, paid);
+    await processStripeEvent(
+      configuredEnv(),
+      stripeEvent(`evt_stale_${crypto.randomUUID()}`, "payment_intent.payment_failed", {
+        ...paid,
+        status: "requires_payment_method",
+        amount_received: 0,
+      }),
+      "stale-failure",
+    );
+    await processStripeEvent(
+      configuredEnv(),
+      stripeEvent(`evt_paid_${crypto.randomUUID()}`, "payment_intent.succeeded", paid),
+      "current-success",
+    );
+    expect(await couponRow(coupon.id)).toMatchObject({ status: "used" });
+    expect(await orderRow(checkout.orderId)).toMatchObject({ status: "paid" });
+    expect(await balance(workspace.organizationId)).toBe(5_000);
+  });
+
   it("releases reservations for failed and canceled payment intents", async () => {
     const stripe = stripeFetchMock();
     const failedWorkspace = await seedWorkspace();
@@ -434,7 +468,7 @@ describe("direct QR coupon checkout", () => {
     });
 
     await processStripeEvent(
-      env,
+      configuredEnv(),
       stripeEvent(`evt_coupon_failed_${crypto.randomUUID()}`, "payment_intent.payment_failed", {
         ...stripe.created[0]!.intent,
         status: "requires_payment_method",

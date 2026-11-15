@@ -793,7 +793,7 @@ export async function cancelDirectQrIntent(params: {
   // this outside the cancellation catch: database failures must remain retryable.
   if (intent.status === "succeeded") {
     await fulfillDirectQrIntent(params.env, intent);
-  } else if (intent.status === "canceled" || intent.status === "requires_payment_method") {
+  } else if (intent.status === "canceled") {
     await failDirectQrIntent(params.env, intent.id);
   }
   return toDirectQrStatus(intent.status);

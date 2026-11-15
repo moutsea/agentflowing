@@ -10,6 +10,7 @@ import { grantCredits } from "./credit-grant";
 // cycle resolves before anything is called.
 import {
   DirectQrUnfulfillableError,
+  cancelDirectQrIntent,
   failDirectQrIntent,
   fulfillDirectQrIntent,
 } from "./direct-qr-service";
@@ -264,6 +265,15 @@ async function dispatchStripeEvent(env: Env, event: Stripe.Event) {
       }
       return;
     case "payment_intent.payment_failed":
+      if (isDirectQrIntent(event.data.object)) {
+        await cancelDirectQrIntent({
+          env,
+          organizationId: metadataValue(event.data.object.metadata, "organizationId") ?? "",
+          paymentIntentId: event.data.object.id,
+        });
+      }
+      await markEventCompleted(env, event.id);
+      return;
     case "payment_intent.canceled":
       if (!isDirectQrIntent(event.data.object)) {
         await markEventCompleted(env, event.id);

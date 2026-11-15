@@ -11,6 +11,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - English and Simplified Chinese open-source documentation.
 - GitHub contribution, security, conduct, issue, and pull-request templates.
 
+### Fixed
+
+- T7/R1: reconcile failed Stripe attempts and release coupon reservations only after confirmed cancellation.
+
 ## [0.1.0] - 2026-08-07
 
 ### Added

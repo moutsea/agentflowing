@@ -134,7 +134,7 @@ directQrRoutes.get("/:id", requireAuth, requireWorkspaceManager, async (context)
       organizationId: context.var.organization.id,
       paymentIntentId: context.req.param("id"),
     });
-    const status = toDirectQrStatus(intent.status);
+    let status = toDirectQrStatus(intent.status);
 
     // Credit now rather than wait for the webhook, so the balance the dialog
     // shows is already updated.
@@ -150,7 +150,13 @@ directQrRoutes.get("/:id", requireAuth, requireWorkspaceManager, async (context)
           message: error instanceof Error ? error.message : String(error),
         });
       }
-    } else if (status === "failed" || status === "canceled") {
+    } else if (status === "failed") {
+      status = await cancelDirectQrIntent({
+        env: context.env,
+        organizationId: context.var.organization.id,
+        paymentIntentId: intent.id,
+      });
+    } else if (status === "canceled") {
       await failDirectQrIntent(context.env, intent.id);
     }
 
