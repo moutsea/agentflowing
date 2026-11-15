@@ -211,6 +211,26 @@ function AdminCodesManager() {
       if (!isCoupon) await loadIssuanceStatus();
     } catch (caught) {
       setError(localizedRequestError(caught, t, i18n.resolvedLanguage));
+      // These domain responses prove the original request issued no batch.
+      // Network/5xx/conflict outcomes retain the original key and body.
+      if (
+        caught instanceof ApiError &&
+        [400, 429].includes(caught.status) &&
+        [
+          "daily_cap_reached",
+          "invalid_request",
+          "invalid_rate",
+          "invalid_valid_days",
+          "invalid_count",
+        ].includes(caught.code ?? "")
+      ) {
+        if (kind === "coupon") setCouponPending(null);
+        else setRedemptionPending(null);
+        saveIssuance(
+          kind === "coupon" ? "admin-coupon-issuance-request" : "admin-redemption-issuance-request",
+          null,
+        );
+      }
     } finally {
       setBusy("");
     }

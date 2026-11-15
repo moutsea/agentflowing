@@ -24,6 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - T7/R7: persist issuance keys together with normalized parameters and provide explicit original-request recovery after refresh.
 - T7/N3: keep SQL-bound credentials out of global failure logs; return bilingual retryable errors with request IDs and credential digests.
 - T7/N1: release definitively rejected Stripe creates and persist exact requests for bounded idempotent recovery before cancellation or settlement.
+- T7/N2: allow correcting definitively unissued admin requests while retaining original request recovery for unknown outcomes.
 
 ## [0.1.0] - 2026-08-07
 
