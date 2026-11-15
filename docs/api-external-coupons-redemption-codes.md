@@ -219,13 +219,13 @@ curl -i -X POST 'https://api.example.com/api/external/redemption-codes' \
 
 预留和支付确认的区分：
 
-| 外部响应                                                                                                                             | 含义                                                          |
-| ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------- |
-| `status: "active"`, `usageState: "available"`, `reservationStatus: "not_reserved"`, `paymentStatus: "not_confirmed"`                 | 可用，尚未预留                                                |
-| `status: "used"`, `usageState: "reserved"`, `isReservationActive: true`, `reservationStatus: "reserved"`, `paymentStatus: "pending"` | 仅为结账预留，尚未支付确认；内部 `reserved` 对外显示为 `used` |
-| `status: "used"`, `usageState: "redeemed"`, `redeemedAt` 非 `null`, `paymentStatus: "confirmed"`                                     | 支付已确认并最终使用                                          |
-| `status: "expired"`                                                                                                                  | 已过期                                                        |
-| `status: "revoked"`                                                                                                                  | 已撤销                                                        |
+| 外部响应                                                                                                                             | 含义                                                                                                                                                                                 |
+| ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `status: "active"`, `usageState: "available"`, `reservationStatus: "not_reserved"`, `paymentStatus: "not_confirmed"`                 | 可用，尚未预留                                                                                                                                                                       |
+| `status: "used"`, `usageState: "reserved"`, `isReservationActive: true`, `reservationStatus: "reserved"`, `paymentStatus: "pending"` | 仅为结账预留，尚未支付确认；内部 `reserved` 对外显示为 `used`                                                                                                                        |
+| `status: "used"`, `usageState: "redeemed"`, `redeemedAt` 非 `null`, `paymentStatus: "confirmed"`                                     | 支付已确认并最终使用                                                                                                                                                                 |
+| `status: "expired"`                                                                                                                  | 已过期，不可新使用；到期前建立且尚未释放的预留仍返回 `usageState: "reserved"`、`reservationStatus: "reserved"` 和 `paymentStatus: "pending"`，`isReservationActive` 独立反映预留窗口 |
+| `status: "revoked"`                                                                                                                  | 已撤销                                                                                                                                                                               |
 
 ### `DELETE /api/external/coupons/:code`
 

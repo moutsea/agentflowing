@@ -347,6 +347,7 @@ export function getCouponState(row: Coupon, now: Date | number = Date.now()): Co
     row.reservationId !== null &&
     reservationExpiresAt !== null &&
     reservationExpiresAt > nowSeconds;
+  const isReserved = isReservationActive || row.status === "reserved" || row.reservationId !== null;
   const isRedeemed = row.redeemedAt !== null || row.status === "used";
   const isRevoked = row.revokedAt !== null || row.status === "revoked";
   const isExpired = row.status === "expired" || expiresAt <= nowSeconds;
@@ -373,12 +374,12 @@ export function getCouponState(row: Coupon, now: Date | number = Date.now()): Co
     return {
       status: "expired",
       internalStatus: row.status,
-      usageState: "available",
+      usageState: isReserved ? "reserved" : "available",
       isAvailable: false,
-      isReservationActive: false,
+      isReservationActive,
     };
   }
-  if (isReservationActive || row.status === "reserved" || row.reservationId !== null) {
+  if (isReserved) {
     return {
       status: "used",
       internalStatus: row.status,
@@ -458,6 +459,7 @@ export async function previewCoupon(params: CouponPreviewParams): Promise<Coupon
   if (!row) return invalidPreview("not_found");
   const state = getCouponState(row, params.now ?? Date.now());
   const reservationBelongsToUser =
+    state.status === "used" &&
     state.usageState === "reserved" &&
     state.isReservationActive &&
     row.reservedByUserId === params.userId;

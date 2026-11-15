@@ -1,10 +1,16 @@
-import { applyD1Migrations, env } from "cloudflare:test";
+import { applyD1Migrations, createExecutionContext, env, SELF } from "cloudflare:test";
 import type Stripe from "stripe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { issueCoupon } from "../src/server/modules/coupons/service";
+import { app } from "../src/server";
+import {
+  getCouponByCode,
+  getCouponState,
+  issueCoupon,
+} from "../src/server/modules/coupons/service";
 import {
   calculateDiscountedMinorAmount,
+  cancelDirectQrIntent,
   createDirectQrCheckout,
   expireStaleDirectQrOrders,
   failDirectQrOrder,
@@ -934,6 +940,173 @@ describe("direct QR coupon checkout", () => {
     expect(await orderRow(checkout.orderId)).toMatchObject({ status: "failed" });
     expect(await couponRow(coupon.id)).toMatchObject({ status: "active", reservationId: null });
   });
+
+  it.each(["confirm", "cancel"] as const)(
+    "preserves an expired coupon's existing reservation until payment %s",
+    async (resolution) => {
+      const signup = await SELF.fetch(`${env.APP_URL}/api/auth/sign-up/email`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: env.APP_URL },
+        body: JSON.stringify({
+          name: "Expiry payer",
+          email: `${crypto.randomUUID()}@example.com`,
+          password: "correct-horse-battery-staple",
+        }),
+      });
+      expect(signup.status).toBe(200);
+      const cookie = signup.headers
+        .getSetCookie()
+        .map((value) => value.split(";", 1)[0])
+        .join("; ");
+      const session = await app.fetch(
+        new Request(`${env.APP_URL}/api/session`, { headers: { cookie } }),
+        env,
+        createExecutionContext(),
+      );
+      const {
+        data: { user, organization },
+      } = (await session.json()) as {
+        data: { user: { id: string; email: string }; organization: { id: string } };
+      };
+      const startingBalance = await balance(organization.id);
+      const runtime = configuredEnv({
+        PLATFORM_ADMIN_USER_IDS: user.id,
+        EXTERNAL_COUPON_API_TOKEN: "expiry-coupon-token",
+      });
+      const stripe = stripeFetchMock();
+      const coupon = await issueCoupon({ env, rate: 20 });
+      const checkout = await createDirectQrCheckout({
+        env: runtime,
+        userId: user.id,
+        organizationId: organization.id,
+        userEmail: user.email,
+        planId: "pro",
+        method: "wechat_pay",
+        appUrl: env.APP_URL,
+        couponCode: coupon.code,
+      });
+      const read = (path: string, method = "GET", body?: unknown) =>
+        app.fetch(
+          new Request(`${env.APP_URL}${path}`, {
+            method,
+            headers: {
+              cookie,
+              origin: env.APP_URL,
+              Authorization: "Bearer expiry-coupon-token",
+              "content-type": "application/json",
+            },
+            ...(body ? { body: JSON.stringify(body) } : {}),
+          }),
+          runtime,
+          createExecutionContext(),
+        );
+      expect(
+        await (await read("/api/billing/coupons/validate", "POST", { code: coupon.code })).json(),
+      ).toMatchObject({ valid: true });
+
+      // Move issuance and checkout into a valid past timeline: reserved before
+      // coupon expiry, now expired, reservation deadline still in the future.
+      const now = Math.floor(Date.now() / 1000);
+      await env.DB.batch([
+        env.DB.prepare(
+          `UPDATE coupon SET createdAt = ?, expires_at = ?, reserved_at = ?, reservation_expires_at = ? WHERE id = ?`,
+        ).bind(now - 86401, now - 1, now - 60, now + 3540, coupon.id),
+        env.DB.prepare(`UPDATE "order" SET createdAt = ? WHERE id = ?`).bind(
+          now - 60,
+          checkout.orderId,
+        ),
+      ]);
+      expect(await couponRow(coupon.id)).toMatchObject({
+        status: "reserved",
+        reservationId: checkout.orderId,
+      });
+      const external = await read(`/api/external/coupons/${coupon.code}`);
+      expect(external.status).toBe(200);
+      expect(await external.json()).toMatchObject({
+        status: "expired",
+        usageState: "reserved",
+        isReservationActive: true,
+        reservationStatus: "reserved",
+        paymentStatus: "pending",
+      });
+      const admin = await read(`/api/admin/coupons/${coupon.code}`);
+      expect(admin.status).toBe(200);
+      expect(await admin.json()).toMatchObject({
+        data: {
+          status: "expired",
+          internalStatus: "reserved",
+          usageState: "reserved",
+          isReservationActive: true,
+          reservationId: checkout.orderId,
+        },
+      });
+      // The owner exception must not make an expired coupon previewable again.
+      expect(
+        await (await read("/api/billing/coupons/validate", "POST", { code: coupon.code })).json(),
+      ).toMatchObject({ valid: false, reason: "expired" });
+      expect(
+        (
+          await read("/api/billing/qr", "POST", {
+            planId: "pro",
+            method: "wechat_pay",
+            couponCode: coupon.code,
+          })
+        ).status,
+      ).toBe(409);
+      expect(stripe.created).toHaveLength(1);
+      for (const prefix of ["/api/external", "/api/admin"]) {
+        const revoke = await read(`${prefix}/coupons/${coupon.code}`, "DELETE");
+        expect(revoke.status).toBe(409);
+        expect(await revoke.json()).toMatchObject({ reason: "reserved" });
+      }
+      // Even an elapsed reservation deadline is not an authoritative release.
+      const expiredWindow = getCouponState((await getCouponByCode(env, coupon.code))!, now + 3600);
+      expect(expiredWindow).toMatchObject({
+        status: "expired",
+        usageState: "reserved",
+        isReservationActive: false,
+        isAvailable: false,
+      });
+
+      if (resolution === "confirm") {
+        await fulfillDirectQrIntent(env, succeededIntent(stripe.created[0]!));
+        expect(await couponRow(coupon.id)).toMatchObject({
+          status: "used",
+          reservationId: checkout.orderId,
+        });
+        expect(await orderRow(checkout.orderId)).toMatchObject({ status: "paid" });
+        expect(await balance(organization.id)).toBe(startingBalance + 5000);
+        expect(await (await read(`/api/external/coupons/${coupon.code}`)).json()).toMatchObject({
+          status: "used",
+          usageState: "redeemed",
+          isReservationActive: false,
+          reservationStatus: "not_reserved",
+          paymentStatus: "confirmed",
+        });
+      } else {
+        expect(
+          await cancelDirectQrIntent({
+            env: runtime,
+            organizationId: organization.id,
+            paymentIntentId: checkout.payment.paymentIntentId,
+          }),
+        ).toBe("canceled");
+        expect(await couponRow(coupon.id)).toMatchObject({
+          status: "expired",
+          reservationId: null,
+        });
+        expect(await orderRow(checkout.orderId)).toMatchObject({ status: "failed" });
+        expect(await balance(organization.id)).toBe(startingBalance);
+        expect(await (await read(`/api/external/coupons/${coupon.code}`)).json()).toMatchObject({
+          status: "expired",
+          usageState: "available",
+          isReservationActive: false,
+          reservationStatus: "not_reserved",
+          paymentStatus: "not_confirmed",
+        });
+      }
+    },
+  );
 
   it("keeps a direct QR fulfillment idempotent even when called beside the webhook", async () => {
     const stripe = stripeFetchMock();
