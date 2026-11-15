@@ -32,7 +32,7 @@ x-api-token: <TOKEN>
 | 兑换码 | `EXTERNAL_REDEMPTION_CODE_API_TOKEN` | `/api/external/redemption-codes/*` |
 | 优惠券 | `EXTERNAL_COUPON_API_TOKEN` | `/api/external/coupons/*` |
 
-把另一套 token 用在错误资源上始终返回 `401`。对应服务端 token 未配置或为空时返回 `503`。token 不出现在响应、日志或示例中；本文示例只使用占位符 `<TOKEN>`。
+通过 `Origin` 检查后，把另一套 token 用在错误资源上返回 `401`；写请求若显式携带错误的 `Origin`，会先返回 `403`，尚未进入 token 鉴权。对应服务端 token 未配置或为空时返回 `503`。token 不出现在响应、日志或示例中；本文示例只使用占位符 `<TOKEN>`。
 
 所有下列接口响应都带：
 
@@ -164,7 +164,7 @@ x-request-id: <REQUEST_ID>
 | `revoked` | 已撤销，不能兑换 |
 | `used` | 已兑换，不能再次兑换 |
 
-兑换动作由登录用户接口执行；对外接口只发行、查询和撤销。兑换失败时使用稳定的 `reason`/`error` 值：`invalid_code`（格式错误，`400`）、`not_found`（不存在，`404`）、`expired`、`revoked`、`already_used`（状态冲突，`409`）。
+兑换动作由登录用户接口执行；对外接口只发行、查询和撤销。登录用户兑换语义中的格式错误可使用 `invalid_code`，但它不是外部 GET/DELETE 的响应值。外部 GET/DELETE 的 code 格式错误统一返回 `400` 和 `error: "invalid_request"`；格式正确但不存在返回 `not_found`（`404`）。兑换相关的 `expired`、`revoked`、`already_used` 表示状态冲突（`409`）。
 
 ### 发行幂等
 
@@ -186,7 +186,7 @@ curl -i -X POST 'https://api.example.com/api/external/redemption-codes' \
 
 优惠券格式为 `CB` 加 10 个字符，字符集为 `ABCDEFGHJKLMNPQRSTUVWXYZ23456789`。路径参数会 trim 并转为大写后校验。
 
-优惠券接口只接受 `EXTERNAL_COUPON_API_TOKEN`，只提供查询和撤销。**没有 `POST /api/external/coupons` 创建接口**；兑换码发行 API 也不是优惠券创建的别名。调用该 POST 路径返回 `404`。
+优惠券接口只接受 `EXTERNAL_COUPON_API_TOKEN`，只提供查询和撤销。**没有 `POST /api/external/coupons` 创建接口**；兑换码发行 API 也不是优惠券创建的别名。调用该 POST 路径在资源 token 已认证后返回 `404`；未认证（缺少或错误 token）时返回 `401`。
 
 ### `GET /api/external/coupons/:code`
 
@@ -257,7 +257,7 @@ curl -i -X POST 'https://api.example.com/api/external/redemption-codes' \
 
 | HTTP | `error`/`reason` 示例 | 含义与处理 |
 | --- | --- | --- |
-| `400` | `invalid_request`、`invalid_code` | 输入、JSON schema、字段范围或代码格式错误；修正请求后再发 |
+| `400` | `invalid_request` | 输入、JSON schema、字段范围或代码格式错误；修正请求后再发 |
 | `401` | `unauthorized` | 缺少 token、token 错误、使用了另一资源的 token，或两个 header 同时存在但 `Authorization` 校验失败 |
 | `403` | `forbidden` | 写请求显式携带了与 `APP_URL` 不同的 `Origin` |
 | `404` | `not_found` | 资源不存在，或已认证资源下未实现的路径/方法；`POST /api/external/coupons` 也属于此类 |
