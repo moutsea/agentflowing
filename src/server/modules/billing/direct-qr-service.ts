@@ -1041,15 +1041,19 @@ async function sweepDirectQrOrder(
     );
     // Search is eventually consistent; an empty result cannot prove non-payment.
     if (!intent) return "skipped";
+    await env.DB.prepare(
+      `UPDATE "order" SET provider_session_id = ?, updatedAt = unixepoch()
+       WHERE id = ? AND provider_session_id IS NULL`,
+    ).bind(intent.id, candidate.id).run();
+    candidate.paymentIntentId = intent.id;
     if (intent.status === "succeeded") {
       await fulfillDirectQrIntent(env, intent);
       return "recovered";
     }
-    if (intent.status === "canceled" || intent.status === "requires_payment_method") {
+    if (intent.status === "canceled") {
       await failDirectQrOrderById(env, candidate.id, true);
       return "failed";
     }
-    return "skipped";
   }
 
   try {

@@ -683,6 +683,32 @@ describe("direct QR coupon checkout", () => {
     expect(await balance(workspace.organizationId)).toBe(5_000);
   });
 
+  it("persists a recovered payable intent and retries cancellation on the next sweep", async () => {
+    const stripe = stripeFetchMock();
+    const workspace = await seedWorkspace();
+    const coupon = await issueCoupon({ env, rate: 20 });
+    const checkout = await createDirectQrCheckout({
+      env: configuredEnv(), ...workspace,
+      userEmail: `${workspace.userId}@example.com`,
+      planId: "pro", method: "wechat_pay", appUrl: env.APP_URL, couponCode: coupon.code,
+    });
+    const intent = stripe.created[0]!.intent;
+    await env.DB.prepare(`UPDATE "order" SET provider_session_id = NULL,
+      createdAt = unixepoch() - 7200 WHERE id = ?`).bind(checkout.orderId).run();
+    const cancel = vi.fn().mockRejectedValueOnce(new Error("cancel timeout"))
+      .mockResolvedValue({ status: "canceled" });
+    const search = vi.fn(async () => ({ data: [intent] }));
+    const recoveryStripe = { paymentIntents: { cancel, search, retrieve: async () => intent } };
+    await expireStaleDirectQrOrders({ env: configuredEnv(), stripe: recoveryStripe });
+    expect(await orderRow(checkout.orderId)).toMatchObject({ paymentIntentId: intent.id });
+    expect(await couponRow(coupon.id)).toMatchObject({ status: "reserved" });
+    await expireStaleDirectQrOrders({ env: configuredEnv(), stripe: recoveryStripe });
+    expect(cancel).toHaveBeenCalledTimes(2);
+    expect(search).toHaveBeenCalledTimes(1);
+    expect(await orderRow(checkout.orderId)).toMatchObject({ status: "failed" });
+    expect(await couponRow(coupon.id)).toMatchObject({ status: "active", reservationId: null });
+  });
+
   it("keeps a direct QR fulfillment idempotent even when called beside the webhook", async () => {
     const stripe = stripeFetchMock();
     const workspace = await seedWorkspace();
