@@ -192,7 +192,7 @@ function AdminCodesManager() {
       };
       if (isCoupon) setCouponPending(original as PendingIssuance<typeof emptyCoupon>);
       else setRedemptionPending(original as PendingIssuance<typeof emptyRedemption>);
-      saveIssuance(storageKey, original);
+      saveIssuance<typeof emptyCoupon | typeof emptyRedemption>(storageKey, original);
       const key = original.key;
       const payload = { ...original.form, ...(!isCoupon ? { idempotencyKey: key } : {}) };
       const response = await apiRequest<IssueResponse>(
